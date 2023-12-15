@@ -22,20 +22,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/clientcmd/api"
-
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
 var (
-	namespaceExample = `
+	runExample = `
 	# view the current namespace in your KUBECONFIG
-	%[1]s ns
+	%[1]s run -n pod-namespace -p pod
 
 	# view all of the namespaces in use by contexts in your KUBECONFIG
-	%[1]s ns --list
+	%[1]s get -n XYZ pod,configmap,secret
 
 	# switch your current-context to one that contains the desired namespace
 	%[1]s ns foo
@@ -44,18 +41,48 @@ var (
 	errNoContext = fmt.Errorf("no context is currently set, use %q to select a new one", "kubectl config use-context <context>")
 )
 
-// NamespaceOptions provides information required to update
+if os.Getenv("K8S_DEBUG_POD_NAME_PREFIX") != "" {
+        k8sDebugPodNamePrefix = os.Geten("K8S_DEBUG_POD_NAME_PREFIX")
+}
+
+
+// DebugWardOptions provides information required to update
 // the current context on a user's KUBECONFIG
-type NamespaceOptions struct {
+type DebugWardOptions struct {
 	configFlags *genericclioptions.ConfigFlags
 
 	resultingContext     *api.Context
 	resultingContextName string
 
-	userSpecifiedCluster   string
-	userSpecifiedContext   string
-	userSpecifiedAuthInfo  string
-	userSpecifiedNamespace string
+	sourcePodNamespace: string
+	sourcePodName:      string
+
+	debugPodNamespace  string
+	debugPodNamePrefix string
+	debugPodImage      string
+	debugPodCommand    string
+
+	debugPodSecurityContextRunAsUser           int
+	debugPodSecurityContextRunAsGroup          int
+	debugPodSecurityContextFsGroup             int
+	debugPodSecurityContextFsGroupChangePolicy string
+	debugPodSecurityContextSeLinuxOptions      string
+	debugPodSecurityContextSeccompProfile      string
+	debugPodSecurityContextSupplementalGroups  []int
+	debugPodSecurityContextSysctls             []string
+
+	debugPodContainerSecurityContextAllowPrivilegeEscalation bool
+	debugPodContainerSecurityContextCapabilities             string
+	debugPodContainerSecurityContextPriviledged              bool
+	debugPodContainerSecurityContextProcMount                string
+	debugPodContainerSecurityContextReadOnlyRootFilesystem   bool
+	debugPodContainerSecurityContextRunAsUser                int
+	debugPodContainerSecurityContextRunAsGroup               int
+	debugPodContainerSecurityContextRunAsNonRoot             bool
+	debugPodContainerSecurityContextSeLinuxOptions           string
+	debugPodContainerSecurityContextSeccompProfile           string
+
+	dryRun bool
 
 	rawConfig      api.Config
 	listNamespaces bool
@@ -64,23 +91,51 @@ type NamespaceOptions struct {
 	genericiooptions.IOStreams
 }
 
-// NewNamespaceOptions provides an instance of NamespaceOptions with default values
-func NewNamespaceOptions(streams genericiooptions.IOStreams) *NamespaceOptions {
-	return &NamespaceOptions{
+// NewDebugWardOptions provides an instance of DebugWardOptions with default values
+func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
+	return &DebugWardOptions{
 		configFlags: genericclioptions.NewConfigFlags(true),
+
+		sourcePodNamespace: "default"
+		sourcePodName: ""
+
+		debugPodNamespace: "debug-ward-tmp"
+		debugPodNamePrefix: "dwpt"
+		debugPodImage: "ubuntu:22.04"
+		debugPodCommand: "bash"
+
+		debugPodSecurityContextRunAsUser: 0
+		debugPodSecurityContextRunAsGroup: 0
+		debugPodSecurityContextFsGroup: 0
+		debugPodSecurityContextFsGroupChangePolicy: "Always"
+		debugPodSecurityContextSeLinuxOptions: ""
+		debugPodSecurityContextSeccompProfile: ""
+		debugPodSecurityContextSupplementalGroups: []
+		debugPodSecurityContextSysctls: []
+
+		debugPodContainerSecurityContextAllowPrivilegeEscalation: true
+		debugPodContainerSecurityContextCapabilities: ""
+		debugPodContainerSecurityContextPriviledged: true
+		debugPodContainerSecurityContextProcMount: ""
+		debugPodContainerSecurityContextReadOnlyRootFilesystem: false
+		debugPodContainerSecurityContextRunAsUser: 0
+		debugPodContainerSecurityContextRunAsGroup: 0
+		debugPodContainerSecurityContextRunAsNonRoot: false
+		debugPodContainerSecurityContextSeLinuxOptions: ""
+		debugPodContainerSecurityContextSeccompProfile: ""
 
 		IOStreams: streams,
 	}
 }
 
-// NewCmdNamespace provides a cobra command wrapping NamespaceOptions
-func NewCmdNamespace(streams genericiooptions.IOStreams) *cobra.Command {
-	o := NewNamespaceOptions(streams)
+// NewCmdDebugWard provides a cobra command wrapping DebugWardOptions
+func NewCmdDebugWard(streams genericiooptions.IOStreams) *cobra.Command {
+	o := NewDebugWardOptions(streams)
 
 	cmd := &cobra.Command{
 		Use:          "ns [new-namespace] [flags]",
 		Short:        "View or set the current namespace",
-		Example:      fmt.Sprintf(namespaceExample, "kubectl"),
+		Example:      fmt.Sprintf(runExample, "kubectl"),
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := o.Complete(c, args); err != nil {
@@ -104,7 +159,7 @@ func NewCmdNamespace(streams genericiooptions.IOStreams) *cobra.Command {
 }
 
 // Complete sets all information required for updating the current context
-func (o *NamespaceOptions) Complete(cmd *cobra.Command, args []string) error {
+func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
 	o.args = args
 
 	var err error
@@ -131,11 +186,6 @@ func (o *NamespaceOptions) Complete(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	o.userSpecifiedContext, err = cmd.Flags().GetString("context")
-	if err != nil {
-		return err
-	}
-
 	o.userSpecifiedCluster, err = cmd.Flags().GetString("cluster")
 	if err != nil {
 		return err
@@ -155,15 +205,6 @@ func (o *NamespaceOptions) Complete(cmd *cobra.Command, args []string) error {
 	o.resultingContext.Cluster = currentContext.Cluster
 	o.resultingContext.AuthInfo = currentContext.AuthInfo
 
-	// if a target context is explicitly provided by the user,
-	// use that as our reference for the final, resulting context
-	if len(o.userSpecifiedContext) > 0 {
-		o.resultingContextName = o.userSpecifiedContext
-		if userCtx, exists := o.rawConfig.Contexts[o.userSpecifiedContext]; exists {
-			o.resultingContext = userCtx.DeepCopy()
-		}
-	}
-
 	// override context info with user provided values
 	o.resultingContext.Namespace = o.userSpecifiedNamespace
 
@@ -174,30 +215,11 @@ func (o *NamespaceOptions) Complete(cmd *cobra.Command, args []string) error {
 		o.resultingContext.AuthInfo = o.userSpecifiedAuthInfo
 	}
 
-	// generate a unique context name based on its new values if
-	// user did not explicitly request a context by name
-	if len(o.userSpecifiedContext) == 0 {
-		o.resultingContextName = generateContextName(o.resultingContext)
-	}
-
 	return nil
 }
 
-func generateContextName(fromContext *api.Context) string {
-	name := fromContext.Namespace
-	if len(fromContext.Cluster) > 0 {
-		name = fmt.Sprintf("%s/%s", name, fromContext.Cluster)
-	}
-	if len(fromContext.AuthInfo) > 0 {
-		cleanAuthInfo := strings.Split(fromContext.AuthInfo, "/")[0]
-		name = fmt.Sprintf("%s/%s", name, cleanAuthInfo)
-	}
-
-	return name
-}
-
 // Validate ensures that all required arguments and flag values are provided
-func (o *NamespaceOptions) Validate() error {
+func (o *DebugWardOptions) Validate() error {
 	if len(o.rawConfig.CurrentContext) == 0 {
 		return errNoContext
 	}
@@ -210,7 +232,7 @@ func (o *NamespaceOptions) Validate() error {
 
 // Run lists all available namespaces on a user's KUBECONFIG or updates the
 // current context based on a provided namespace.
-func (o *NamespaceOptions) Run() error {
+func (o *DebugWardOptions) Run() error {
 	if len(o.userSpecifiedNamespace) > 0 && o.resultingContext != nil {
 		return o.setNamespace(o.resultingContext, o.resultingContextName)
 	}
@@ -250,41 +272,9 @@ func (o *NamespaceOptions) Run() error {
 	return nil
 }
 
-func isContextEqual(ctxA, ctxB *api.Context) bool {
-	if ctxA == nil || ctxB == nil {
-		return false
-	}
-	if ctxA.Cluster != ctxB.Cluster {
-		return false
-	}
-	if ctxA.Namespace != ctxB.Namespace {
-		return false
-	}
-	if ctxA.AuthInfo != ctxB.AuthInfo {
-		return false
-	}
-
-	return true
-}
-
 // setNamespace receives a "desired" context state and determines if a similar context
 // is already present in a user's KUBECONFIG. If one is not, then a new context is added
 // to the user's config under the provided destination name.
 // The current context field is updated to point to the new context.
-func (o *NamespaceOptions) setNamespace(fromContext *api.Context, withContextName string) error {
-	if len(fromContext.Namespace) == 0 {
-		return fmt.Errorf("a non-empty namespace must be provided")
-	}
-
-	configAccess := clientcmd.NewDefaultPathOptions()
-
-	// determine if we have already saved this context to the user's KUBECONFIG before
-	// if so, simply switch the current context to the existing one.
-	if existingResultingCtx, exists := o.rawConfig.Contexts[withContextName]; !exists || !isContextEqual(fromContext, existingResultingCtx) {
-		o.rawConfig.Contexts[withContextName] = fromContext
-	}
-	o.rawConfig.CurrentContext = withContextName
-
-	fmt.Fprintf(o.Out, "namespace changed to %q\n", fromContext.Namespace)
-	return clientcmd.ModifyConfig(configAccess, o.rawConfig, true)
+func (o *DebugWardOptions) setNamespace(fromContext *api.Context, withContextName string) error {
 }
