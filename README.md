@@ -1,6 +1,11 @@
 # kubectl-debug-ward
 
-start
+### build
 ```
-GO111MODULE="on" go build cmd/kubectl-debug-ward.go
+bash release/build.sh
+```
+
+### package the version and create the manifest
+```
+bash release/package.sh
 ```
