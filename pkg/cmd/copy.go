@@ -21,7 +21,6 @@ package cmd
 import (
     "context"
     "fmt"
-    "log"
     "path/filepath"
     "os"
     "gopkg.in/yaml.v3"
@@ -31,6 +30,8 @@ import (
 
     corev1 "k8s.io/api/core/v1"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+    log "github.com/sirupsen/logrus"
 
     "k8s.io/client-go/kubernetes"
 
@@ -64,8 +65,6 @@ type DebugWardOptions struct {
 
     resultingContext     *api.Context
     resultingContextName string
-
-    log *log.Logger
 
     srcK8sClient *kubernetes.Clientset
     dstK8sClient *kubernetes.Clientset
@@ -117,8 +116,6 @@ type DebugWardOptions struct {
 func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
     return &DebugWardOptions{
     // configFlags: genericclioptions.NewConfigFlags(true),
-	log: log.New(os.Stdout, "DEBUG-WARD: ", log.Ldate|log.Ltime|log.Lshortfile),
-
         dryRun: true,
 
         sourcePodNamespace: "default",
@@ -157,6 +154,8 @@ func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
 func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
     o := NewDebugWardOptions(streams)
 
+    log.SetFormatter(&log.JSONFormatter{})
+
     cmd := &cobra.Command{
         Use:          "copy [new-namespace] [flags]",
         Short:        "View or set the current namespace",
@@ -189,12 +188,12 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
 
     kubeconfigPath := os.Getenv("KUBECONFIG")
     if kubeconfigPath != "" {
-        o.log.Println("KUBECONFIG environment variable is defined:", kubeconfigPath)
+        log.Info("KUBECONFIG environment variable is defined:" + kubeconfigPath)
     } else {
-	filePath := filepath.Join(homeDir(), ".kube", "config")
+    filePath := filepath.Join(homeDir(), ".kube", "config")
 
         if !fileExists(filePath) {
-            o.log.Fatal("Neither KUBECONFIG environment variable nor default ~/.kube/config file exists:", filePath)
+            log.Fatal("Neither KUBECONFIG environment variable nor default ~/.kube/config file exists:" + filePath)
         }
     }
 
@@ -206,8 +205,7 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
 
     o.srcK8sClient, err = kubernetes.NewForConfig(config)
     if err != nil {
-        fmt.Printf("Error creating Kubernetes source client: %v\n", err)
-        os.Exit(1)
+        log.Fatal("Error creating Kubernetes source client: %v\n", err)
     }
 
 
@@ -275,8 +273,8 @@ func homeDir() string {
 }
 
 func fileExists(filePath string) bool {
-	_, err := os.Stat(filePath)
-	return err == nil || !os.IsNotExist(err)
+    _, err := os.Stat(filePath)
+    return err == nil || !os.IsNotExist(err)
 }
 
 // Validate ensures that all required arguments and flag values are provided
@@ -323,77 +321,77 @@ func (o *DebugWardOptions) Run() error {
 }
 
 func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
-    fmt.Println("\n# ConfigMaps YAML")
+    log.Info("\n# ConfigMaps YAML")
     for _, configMap := range configMaps {
-        fmt.Println("\n---")
+        log.Info("\n---")
         configMapYAML, err := yaml.Marshal(configMap)
         if err != nil {
             return err
         }
-        fmt.Println(string(configMapYAML))
+        log.Info(string(configMapYAML))
     }
 
-    fmt.Println("\n# Secrets YAML")
+    log.Info("\n# Secrets YAML")
     for _, secret := range secrets {
-        fmt.Println("\n---")
+        log.Info("\n---")
         secretYAML, err := yaml.Marshal(secret)
         if err != nil {
             return err
         }
-        fmt.Println(string(secretYAML))
+        log.Info(string(secretYAML))
     }
 
-    fmt.Println("\n# Pod YAML")
-    fmt.Println("\n---")
+    log.Info("\n# Pod YAML")
+    log.Info("\n---")
     podYAML, err := yaml.Marshal(pod)
     if err != nil {
         return err
     }
-    fmt.Println(string(podYAML))
+    log.Info(string(podYAML))
 
     return nil
 }
 
 func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
-    fmt.Println("\n# ConfigMaps YAML")
+    log.Info("\n# ConfigMaps YAML")
     for _, configMap := range configMaps {
-        fmt.Println("\n---")
+        log.Info("\n---")
         configMapYAML, err := yaml.Marshal(configMap)
         if err != nil {
             return err
         }
         err = createResource(o.srcK8sClient, configMapYAML, "ConfigMap")
         if err != nil {
-            log.Fatalf("Error creating ConfigMap: %v", err)
+            log.Fatal("Error creating ConfigMap: %v", err)
         }
-        fmt.Println("ConfigMap created successfully.")
+        log.Info("ConfigMap created successfully.")
     }
 
-    fmt.Println("\n# Secrets YAML")
+    log.Info("\n# Secrets YAML")
     for _, secret := range secrets {
-        fmt.Println("\n---")
+        log.Info("\n---")
         secretYAML, err := yaml.Marshal(secret)
         if err != nil {
             return err
         }
         err = createResource(o.srcK8sClient, secretYAML, "Secret")
         if err != nil {
-            log.Fatalf("Error creating Secret: %v", err)
+            log.Fatal("Error creating Secret: %v", err)
         }
-        fmt.Println("Secret created successfully.")
+        log.Info("Secret created successfully.")
     }
 
-    fmt.Println("\n# Pod YAML")
-    fmt.Println("\n---")
+    log.Info("\n# Pod YAML")
+    log.Info("\n---")
     podYAML, err := yaml.Marshal(pod)
     if err != nil {
         return err
     }
     err = createResource(o.srcK8sClient, podYAML, "Pod")
     if err != nil {
-        log.Fatalf("Error creating Pod: %v", err)
+        log.Fatal("Error creating Pod: %v", err)
     }
-    fmt.Println("Pod created successfully.")
+    log.Info("Pod created successfully.")
 
     return nil
 }
