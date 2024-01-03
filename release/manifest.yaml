@@ -22,7 +22,5 @@ spec:
     sha256: DEBUG_WARD_MANIFEST_ARCHIVE_SHA256
     files:
     - from: "kubectl-debug-ward-*/kubectl-debug-ward"
-      to: "kubectl-debug-ward"
-    - from: "kubectl-debug-ward-*/LICENSE"
-      to: "LICENSE"
+      to: "."
     bin: kubectl-debug-ward
