@@ -21,8 +21,8 @@ spec:
     uri: https://github.com/strajansebastian/kubectl-debug-ward/archive/DEBUG_WARD_MANIFEST_VERSION.zip
     sha256: DEBUG_WARD_MANIFEST_ARCHIVE_SHA256
     files:
-    - from: "kubectl-debug-ward-*/debug-ward"
-      to: "./debug-ward"
-    - from: "LICENSE"
-      to: "."
-    bin: debug-ward
+    - from: "kubectl-debug-ward-*/kubectl-debug-ward"
+      to: "kubectl-debug-ward"
+    - from: "kubectl-debug-ward-*/LICENSE"
+      to: "LICENSE"
+    bin: kubectl-debug-ward

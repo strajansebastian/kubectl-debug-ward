@@ -12,6 +12,8 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+# based on https://github.com/kubernetes/sample-cli-plugin
 */
 
 package cmd
@@ -19,15 +21,24 @@ package cmd
 import (
     "context"
     "fmt"
-//    "strings"
+    "log"
+    "path/filepath"
+    "os"
+    "gopkg.in/yaml.v3"
+    "strings"
 
     "github.com/spf13/cobra"
 
+    corev1 "k8s.io/api/core/v1"
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
     "k8s.io/client-go/kubernetes"
-//    "k8s.io/client-go/tools/clientcmd"
+
+    "k8s.io/client-go/tools/clientcmd"
     "k8s.io/client-go/tools/clientcmd/api"
 
-    "k8s.io/cli-runtime/pkg/genericclioptions"
+
+//    "k8s.io/cli-runtime/pkg/genericclioptions"
     "k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
@@ -49,13 +60,15 @@ var (
 // DebugWardOptions provides information required to update
 // the current context on a user's KUBECONFIG
 type DebugWardOptions struct {
-    configFlags *genericclioptions.ConfigFlags
+//    configFlags *genericclioptions.ConfigFlags
 
     resultingContext     *api.Context
     resultingContextName string
 
-    srcK8sClient kubernetes
-    dstK8sClient kubernetes
+    log *log.Logger
+
+    srcK8sClient *kubernetes.Clientset
+    dstK8sClient *kubernetes.Clientset
 
     dryRun bool
 
@@ -103,7 +116,8 @@ type DebugWardOptions struct {
 // NewDebugWardOptions provides an instance of DebugWardOptions with default values
 func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
     return &DebugWardOptions{
-        configFlags: genericclioptions.NewConfigFlags(true),
+    // configFlags: genericclioptions.NewConfigFlags(true),
+	log: log.New(os.Stdout, "DEBUG-WARD: ", log.Ldate|log.Ltime|log.Lshortfile),
 
         dryRun: true,
 
@@ -163,8 +177,8 @@ func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
         },
     }
 
-    cmd.Flags().BoolVar(&o.listNamespaces, "list", o.listNamespaces, "if true, print the list of all namespaces in the current KUBECONFIG")
-    o.configFlags.AddFlags(cmd.Flags())
+    cmd.Flags().BoolVar(&o.dryRun, "dry-run", o.dryRun, "if true, print the yaml of the pod that is going to be created in the debug-ward namespace; default true")
+    // o.configFlags.AddFlags(cmd.Flags())
 
     return cmd
 }
@@ -173,18 +187,35 @@ func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
 func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
     o.args = args
 
-    o.srcK8sClientSource, err = kubernetes.NewForConfig(config)
+    kubeconfigPath := os.Getenv("KUBECONFIG")
+    if kubeconfigPath != "" {
+        o.log.Println("KUBECONFIG environment variable is defined:", kubeconfigPath)
+    } else {
+	filePath := filepath.Join(homeDir(), ".kube", "config")
+
+        if !fileExists(filePath) {
+            o.log.Fatal("Neither KUBECONFIG environment variable nor default ~/.kube/config file exists:", filePath)
+        }
+    }
+
+    // Load kubeconfig
+    config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    o.srcK8sClient, err = kubernetes.NewForConfig(config)
     if err != nil {
         fmt.Printf("Error creating Kubernetes source client: %v\n", err)
         os.Exit(1)
     }
 
 
-    var err error
-    o.rawConfig, err = o.configFlags.ToRawKubeConfigLoader().RawConfig()
-    if err != nil {
-        return err
-    }
+    // var err error
+    // o.rawConfig, err = o.configFlags.ToRawKubeConfigLoader().RawConfig()
+    // if err != nil {
+    //     return err
+    // }
 
     o.sourcePodNamespace, err = cmd.Flags().GetString("namespace")
     if err != nil {
@@ -236,6 +267,18 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
     return nil
 }
 
+func homeDir() string {
+    if h := os.Getenv("HOME"); h != "" {
+        return h
+    }
+    return os.Getenv("USERPROFILE")
+}
+
+func fileExists(filePath string) bool {
+	_, err := os.Stat(filePath)
+	return err == nil || !os.IsNotExist(err)
+}
+
 // Validate ensures that all required arguments and flag values are provided
 func (o *DebugWardOptions) Validate() error {
     if len(o.rawConfig.CurrentContext) == 0 {
@@ -250,18 +293,18 @@ func (o *DebugWardOptions) Validate() error {
 
 // Run copy of debug pod using the provided options
 func (o *DebugWardOptions) Run() error {
-    pod, err := o.srcK8sClient.CoreV1().Pods(o.sourcePodNamespace).Get(context.TODO(), o.sourcePodName, wait.NeverStop)
+    pod, err := o.srcK8sClient.CoreV1().Pods(o.sourcePodNamespace).Get(context.TODO(), o.sourcePodName, metav1.GetOptions{})
     if err != nil {
         return err
     }
 
     // Get associated secrets and config maps
-    secrets, err := getSecretsFromPod(o, pod)
+    secrets, err := getSecretsFromPod(o.srcK8sClient, pod)
     if err != nil {
         return err
     }
 
-    configMaps, err := getConfigMapsFromPod(o, pod)
+    configMaps, err := getConfigMapsFromPod(o.srcK8sClient, pod)
     if err != nil {
         return err
     }
@@ -270,16 +313,16 @@ func (o *DebugWardOptions) Run() error {
     // remove secrets/ configMap duplicates to avoid errors during creation
     // ###################
     if o.dryRun == true {
-        debugWardDryRun(pod, configMaps, secrets)
+        o.debugWardDryRun(pod, configMaps, secrets)
     } else {
-        debugWardCopy(pod, configMaps, secrets)
+        o.debugWardCopy(pod, configMaps, secrets)
     }
 
 
     return nil
 }
 
-func debugWardDryRun(pod, configMaps, secrets) error {
+func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
     fmt.Println("\n# ConfigMaps YAML")
     for _, configMap := range configMaps {
         fmt.Println("\n---")
@@ -311,7 +354,7 @@ func debugWardDryRun(pod, configMaps, secrets) error {
     return nil
 }
 
-func debugWardCopy(pod, configMaps, secrets) error {
+func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
     fmt.Println("\n# ConfigMaps YAML")
     for _, configMap := range configMaps {
         fmt.Println("\n---")
@@ -319,7 +362,7 @@ func debugWardCopy(pod, configMaps, secrets) error {
         if err != nil {
             return err
         }
-        err = createResource(clientset, configMapYAML, "ConfigMap")
+        err = createResource(o.srcK8sClient, configMapYAML, "ConfigMap")
         if err != nil {
             log.Fatalf("Error creating ConfigMap: %v", err)
         }
@@ -333,7 +376,7 @@ func debugWardCopy(pod, configMaps, secrets) error {
         if err != nil {
             return err
         }
-        err = createResource(clientset, secretYAML, "Secret")
+        err = createResource(o.srcK8sClient, secretYAML, "Secret")
         if err != nil {
             log.Fatalf("Error creating Secret: %v", err)
         }
@@ -346,7 +389,7 @@ func debugWardCopy(pod, configMaps, secrets) error {
     if err != nil {
         return err
     }
-    err = createResource(clientset, podYAML, "Pod")
+    err = createResource(o.srcK8sClient, podYAML, "Pod")
     if err != nil {
         log.Fatalf("Error creating Pod: %v", err)
     }
@@ -355,13 +398,13 @@ func debugWardCopy(pod, configMaps, secrets) error {
     return nil
 }
 
-func getSecretsFromPod(clientset *kubernetes.Clientset, pod *v1.Pod) ([]*v1.Secret, error) {
-    var secrets []*v1.Secret
+func getSecretsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*corev1.Secret, error) {
+    var secrets []*corev1.Secret
 
     // Check volumes for secrets
     for _, volume := range pod.Spec.Volumes {
         if volume.Secret != nil {
-            secret, err := clientset.CoreV1().Secrets(pod.Namespace).Get(context.TODO(), volume.Secret.SecretName, wait.NeverStop)
+            secret, err := clientset.CoreV1().Secrets(pod.Namespace).Get(context.TODO(), volume.Secret.SecretName, metav1.GetOptions{})
             if err != nil {
                 return nil, err
             }
@@ -373,8 +416,7 @@ func getSecretsFromPod(clientset *kubernetes.Clientset, pod *v1.Pod) ([]*v1.Secr
     for _, container := range pod.Spec.Containers {
         for _, env := range container.Env {
             if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
-                secret, err := clientset.CoreV1().Secrets(pod.Namespace).Get(context.TODO(),
-                    env.ValueFrom.SecretKeyRef.Name, wait.NeverStop)
+                secret, err := clientset.CoreV1().Secrets(pod.Namespace).Get(context.TODO(), env.ValueFrom.SecretKeyRef.Name, metav1.GetOptions{})
                 if err != nil {
                     return nil, err
                 }
@@ -386,14 +428,13 @@ func getSecretsFromPod(clientset *kubernetes.Clientset, pod *v1.Pod) ([]*v1.Secr
     return secrets, nil
 }
 
-func getConfigMapsFromPod(clientset *kubernetes.Clientset, pod *v1.Pod) ([]*v1.ConfigMap, error) {
-    var configMaps []*v1.ConfigMap
+func getConfigMapsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*corev1.ConfigMap, error) {
+    var configMaps []*corev1.ConfigMap
 
     // Check volumes for config maps
     for _, volume := range pod.Spec.Volumes {
         if volume.ConfigMap != nil {
-            configMap, err := clientset.CoreV1().ConfigMaps(pod.Namespace).Get(context.TODO(),
-                volume.ConfigMap.Name, wait.NeverStop)
+            configMap, err := clientset.CoreV1().ConfigMaps(pod.Namespace).Get(context.TODO(), volume.ConfigMap.Name, metav1.GetOptions{})
             if err != nil {
                 return nil, err
             }
@@ -405,8 +446,7 @@ func getConfigMapsFromPod(clientset *kubernetes.Clientset, pod *v1.Pod) ([]*v1.C
     for _, container := range pod.Spec.Containers {
         for _, env := range container.Env {
             if env.ValueFrom != nil && env.ValueFrom.ConfigMapKeyRef != nil {
-                configMap, err := clientset.CoreV1().ConfigMaps(pod.Namespace).Get(context.TODO(),
-                    env.ValueFrom.ConfigMapKeyRef.Name, wait.NeverStop)
+                configMap, err := clientset.CoreV1().ConfigMaps(pod.Namespace).Get(context.TODO(), env.ValueFrom.ConfigMapKeyRef.Name, metav1.GetOptions{})
                 if err != nil {
                     return nil, err
                 }
@@ -432,4 +472,39 @@ func createResource(clientset *kubernetes.Clientset, yamlData []byte, resourceTy
         return fmt.Errorf("failed to create %s: %v", resourceType, err)
     }
     return nil
+}
+
+func getResourceType(yamlData []byte) string {
+    lines := strings.Split(string(yamlData), "\n")
+    for _, line := range lines {
+        if strings.HasPrefix(line, "kind:") {
+            parts := strings.Split(line, ":")
+            return strings.TrimSpace(parts[1])
+        }
+    }
+    return ""
+}
+
+func getResourceNamespace(yamlData []byte) string {
+    lines := strings.Split(string(yamlData), "\n")
+    for _, line := range lines {
+        if strings.HasPrefix(line, "namespace:") {
+            parts := strings.Split(line, ":")
+            return strings.TrimSpace(parts[1])
+        }
+    }
+    return "default" // Default namespace if not specified
+}
+
+func getResourceName(yamlData []byte) string {
+    lines := strings.Split(string(yamlData), "\n")
+    for _, line := range lines {
+        if strings.HasPrefix(line, "metadata:") {
+            // Check for the next line that contains the resource name
+            if len(lines) > 1 {
+                return strings.TrimSpace(strings.Split(lines[1], ":")[1])
+            }
+        }
+    }
+    return ""
 }
