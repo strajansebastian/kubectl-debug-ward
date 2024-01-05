@@ -20,6 +20,9 @@ docker run --rm -it \
     -v `pwd`/cmd:/app/cmd \
     -v `pwd`/pkg:/app/pkg \
     -v `pwd`/release:/app/release \
+    -v  ~/.kube/:/config \
+    -e KUBECONFIG=/config/config \
+    -e DEBUG_WARD_LOG_LEVEL=debug \
     -e DEBUG_WARD_GIT_VERSION=`git describe --tags --abbrev=0` \
     kubectl-debug-ward:latest bash
 ```

@@ -39,7 +39,7 @@ import (
     "k8s.io/client-go/tools/clientcmd/api"
 
 
-//    "k8s.io/cli-runtime/pkg/genericclioptions"
+    "k8s.io/cli-runtime/pkg/genericclioptions"
     "k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
@@ -61,7 +61,7 @@ var (
 // DebugWardOptions provides information required to update
 // the current context on a user's KUBECONFIG
 type DebugWardOptions struct {
-//    configFlags *genericclioptions.ConfigFlags
+    configFlags *genericclioptions.ConfigFlags
 
     resultingContext     *api.Context
     resultingContextName string
@@ -72,12 +72,15 @@ type DebugWardOptions struct {
     dryRun bool
 
     // cluster identification
-    sourcePodCluster    string
-    sourcePodAuthInfo   string
+    debugPodKubeConfig string
 
     // inside cluster identification
+    sourcePodCluster    string
+    sourcePodContext    string
+    sourcePodUser       string
     sourcePodNamespace  string
     sourcePodName       string
+
     debugPodNamespace  string
     debugPodNamePrefix string
 
@@ -114,8 +117,22 @@ type DebugWardOptions struct {
 
 // NewDebugWardOptions provides an instance of DebugWardOptions with default values
 func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
+    log.SetFormatter(&log.JSONFormatter{})
+
+    lvl, ok := os.LookupEnv("DEBUG_WARD_LOG_LEVEL")
+    if !ok {
+        lvl = "info"
+    }
+
+    ll, err := log.ParseLevel(lvl)
+    if err != nil {
+        ll = log.TraceLevel
+    }
+    log.SetLevel(ll)
+
     return &DebugWardOptions{
-    // configFlags: genericclioptions.NewConfigFlags(true),
+        configFlags: genericclioptions.NewConfigFlags(true),
+
         dryRun: true,
 
         sourcePodNamespace: "default",
@@ -152,13 +169,12 @@ func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
 
 // NewDebugWardPatient provides a cobra command wrapping DebugWardOptions
 func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
+    log.Trace("Starting NewDebugWardOptions")
     o := NewDebugWardOptions(streams)
 
-    log.SetFormatter(&log.JSONFormatter{})
-
     cmd := &cobra.Command{
-        Use:          "copy [new-namespace] [flags]",
-        Short:        "View or set the current namespace",
+        Use:          "debug-ward [new-namespace] [flags]",
+        Short:        "View or create a copy of a specified pod that can be used for debugging in a new namespace or cluster",
         Example:      fmt.Sprintf(runExample, "kubectl"),
         SilenceUsage: true,
         RunE: func(c *cobra.Command, args []string) error {
@@ -176,6 +192,10 @@ func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
         },
     }
 
+    cmd.Flags().StringVar(&o.sourcePodCluster, "cluster", o.sourcePodCluster, "defaults to ")
+    cmd.Flags().StringVar(&o.sourcePodUser, "user", o.sourcePodUser, "defaults to ")
+    cmd.Flags().StringVar(&o.sourcePodContext, "context", o.sourcePodContext, "defaults to ")
+    cmd.Flags().StringVar(&o.sourcePodNamespace, "namespace", o.sourcePodNamespace, "defaults to default")
     cmd.Flags().BoolVar(&o.dryRun, "dry-run", o.dryRun, "if true, print the yaml of the pod that is going to be created in the debug-ward namespace; default true")
     // o.configFlags.AddFlags(cmd.Flags())
 
@@ -184,13 +204,16 @@ func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
 
 // Complete sets all information required for updating the current context
 func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
+    log.Trace("Starting Complete")
+
+    var err error
     o.args = args
 
     kubeconfigPath := os.Getenv("KUBECONFIG")
     if kubeconfigPath != "" {
         log.Info("KUBECONFIG environment variable is defined:" + kubeconfigPath)
     } else {
-    filePath := filepath.Join(homeDir(), ".kube", "config")
+        filePath := filepath.Join(homeDir(), ".kube", "config")
 
         if !fileExists(filePath) {
             log.Fatal("Neither KUBECONFIG environment variable nor default ~/.kube/config file exists:" + filePath)
@@ -198,33 +221,30 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
     }
 
     // Load kubeconfig
-    config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    o.srcK8sClient, err = kubernetes.NewForConfig(config)
-    if err != nil {
-        log.Fatal("Error creating Kubernetes source client: %v\n", err)
-    }
-
-
-    // var err error
-    // o.rawConfig, err = o.configFlags.ToRawKubeConfigLoader().RawConfig()
+    // config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
     // if err != nil {
-    //     return err
+    //     log.Fatal(err)
     // }
+
+    o.rawConfig, err = o.configFlags.ToRawKubeConfigLoader().RawConfig()
+    if err != nil {
+        return err
+    }
+
+    // o.srcK8sClient, err = kubernetes.NewForConfig(config)
+    // if err != nil {
+    //     log.Fatal("Error creating Kubernetes source client: \n", err)
+    // }
+
+    o.dryRun, err = cmd.Flags().GetBool("dry-run")
+    if err != nil {
+        return err
+    }
+    log.Trace("flag: dry-run set to ", o.dryRun)
 
     o.sourcePodNamespace, err = cmd.Flags().GetString("namespace")
     if err != nil {
         return err
-    }
-    if len(args) > 0 {
-        if len(o.sourcePodNamespace) > 0 {
-            return fmt.Errorf("cannot specify both a --namespace value and a new namespace argument")
-        }
-
-        o.sourcePodNamespace = args[0]
     }
 
     // if no namespace argument or flag value was specified, then there
@@ -233,24 +253,45 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
         return nil
     }
 
+    log.Trace("setting context start...")
+    o.sourcePodContext, err = cmd.Flags().GetString("context")
+    if err != nil {
+        return err
+    }
+
     o.sourcePodCluster, err = cmd.Flags().GetString("cluster")
     if err != nil {
         return err
     }
 
-    o.sourcePodAuthInfo, err = cmd.Flags().GetString("user")
+    o.sourcePodUser, err = cmd.Flags().GetString("user")
     if err != nil {
         return err
     }
 
+    log.Trace("setting context s10...")
     currentContext, exists := o.rawConfig.Contexts[o.rawConfig.CurrentContext]
     if !exists {
+	log.Trace("setting context s10001...")
         return errNoContext
     }
 
+    log.Trace("setting context s11...")
     o.resultingContext = api.NewContext()
     o.resultingContext.Cluster = currentContext.Cluster
     o.resultingContext.AuthInfo = currentContext.AuthInfo
+
+    log.Trace("setting context s12...")
+    // if a target context is explicitly provided by the user,
+    // use that as our reference for the final, resulting context
+    if len(o.sourcePodContext) > 0 {
+        o.resultingContextName = o.sourcePodContext
+        if userCtx, exists := o.rawConfig.Contexts[o.sourcePodContext]; exists {
+            o.resultingContext = userCtx.DeepCopy()
+        }
+    }
+
+    log.Trace("setting context s13...")
 
     // override context info with user provided values
     o.resultingContext.Namespace = o.sourcePodNamespace
@@ -258,11 +299,36 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
     if len(o.sourcePodCluster) > 0 {
         o.resultingContext.Cluster = o.sourcePodCluster
     }
-    if len(o.sourcePodAuthInfo) > 0 {
-        o.resultingContext.AuthInfo = o.sourcePodAuthInfo
+    if len(o.sourcePodUser) > 0 {
+        o.resultingContext.AuthInfo = o.sourcePodUser
     }
 
+    // generate a unique context name based on its new values if
+    // user did not explicitly request a context by name
+    if len(o.sourcePodContext) == 0 {
+        o.resultingContextName = generateContextName(o.resultingContext)
+    }
+
+    // override context info with user provided values
+    o.resultingContext.Namespace = o.sourcePodNamespace
+
+    log.Trace("setting context end...")
+
     return nil
+}
+
+func generateContextName(fromContext *api.Context) string {
+    log.Trace("Starting generateContextName")
+    name := fromContext.Namespace
+    if len(fromContext.Cluster) > 0 {
+        name = fmt.Sprintf("%s/%s", name, fromContext.Cluster)
+    }
+    if len(fromContext.AuthInfo) > 0 {
+        cleanAuthInfo := strings.Split(fromContext.AuthInfo, "/")[0]
+        name = fmt.Sprintf("%s/%s", name, cleanAuthInfo)
+    }
+
+    return name
 }
 
 func homeDir() string {
@@ -279,6 +345,8 @@ func fileExists(filePath string) bool {
 
 // Validate ensures that all required arguments and flag values are provided
 func (o *DebugWardOptions) Validate() error {
+    log.Trace("Starting Validate")
+
     if len(o.rawConfig.CurrentContext) == 0 {
         return errNoContext
     }
@@ -291,6 +359,11 @@ func (o *DebugWardOptions) Validate() error {
 
 // Run copy of debug pod using the provided options
 func (o *DebugWardOptions) Run() error {
+    log.Trace("Starting Run")
+    // if len(o.sourcePodNamespace) > 0 && o.resultingContext != nil {
+    //     return o.setNamespace(o.resultingContext, o.resultingContextName)
+    // }
+
     pod, err := o.srcK8sClient.CoreV1().Pods(o.sourcePodNamespace).Get(context.TODO(), o.sourcePodName, metav1.GetOptions{})
     if err != nil {
         return err
@@ -321,6 +394,7 @@ func (o *DebugWardOptions) Run() error {
 }
 
 func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
+    log.Trace("Starting debugWardDryRun")
     log.Info("\n# ConfigMaps YAML")
     for _, configMap := range configMaps {
         log.Info("\n---")
@@ -353,6 +427,7 @@ func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1
 }
 
 func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
+    log.Trace("Starting debugWardCopy")
     log.Info("\n# ConfigMaps YAML")
     for _, configMap := range configMaps {
         log.Info("\n---")
@@ -362,7 +437,7 @@ func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.C
         }
         err = createResource(o.srcK8sClient, configMapYAML, "ConfigMap")
         if err != nil {
-            log.Fatal("Error creating ConfigMap: %v", err)
+            log.Fatal("Error creating ConfigMap: ", err)
         }
         log.Info("ConfigMap created successfully.")
     }
@@ -376,7 +451,7 @@ func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.C
         }
         err = createResource(o.srcK8sClient, secretYAML, "Secret")
         if err != nil {
-            log.Fatal("Error creating Secret: %v", err)
+            log.Fatal("Error creating Secret: ", err)
         }
         log.Info("Secret created successfully.")
     }
@@ -389,7 +464,7 @@ func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.C
     }
     err = createResource(o.srcK8sClient, podYAML, "Pod")
     if err != nil {
-        log.Fatal("Error creating Pod: %v", err)
+        log.Fatal("Error creating Pod: ", err)
     }
     log.Info("Pod created successfully.")
 
@@ -397,6 +472,7 @@ func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.C
 }
 
 func getSecretsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*corev1.Secret, error) {
+    log.Trace("Starting getSecretsFromPod")
     var secrets []*corev1.Secret
 
     // Check volumes for secrets
@@ -427,6 +503,7 @@ func getSecretsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*cor
 }
 
 func getConfigMapsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*corev1.ConfigMap, error) {
+    log.Trace("Starting getConfigMapsFromPod")
     var configMaps []*corev1.ConfigMap
 
     // Check volumes for config maps
@@ -457,6 +534,7 @@ func getConfigMapsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*
 }
 
 func createResource(clientset *kubernetes.Clientset, yamlData []byte, resourceType string) error {
+    log.Trace("Starting createResource")
     // Create resource in the cluster
     _, err := clientset.CoreV1().RESTClient().Post().
         Resource(getResourceType(yamlData)).
@@ -467,7 +545,7 @@ func createResource(clientset *kubernetes.Clientset, yamlData []byte, resourceTy
         Get()
 
     if err != nil {
-        return fmt.Errorf("failed to create %s: %v", resourceType, err)
+        return fmt.Errorf("failed to create ", resourceType, err)
     }
     return nil
 }
@@ -505,4 +583,40 @@ func getResourceName(yamlData []byte) string {
         }
     }
     return ""
+}
+
+func isContextEqual(ctxA, ctxB *api.Context) bool {
+    if ctxA == nil || ctxB == nil {
+        return false
+    }
+    if ctxA.Cluster != ctxB.Cluster {
+        return false
+    }
+    if ctxA.Namespace != ctxB.Namespace {
+        return false
+    }
+    if ctxA.AuthInfo != ctxB.AuthInfo {
+        return false
+    }
+
+    return true
+}
+
+func (o *DebugWardOptions) setNamespace(fromContext *api.Context, withContextName string) error {
+    log.Trace("Starting setNamespace")
+    if len(fromContext.Namespace) == 0 {
+        return fmt.Errorf("a non-empty namespace must be provided")
+    }
+
+    configAccess := clientcmd.NewDefaultPathOptions()
+
+    // determine if we have already saved this context to the user's KUBECONFIG before
+    // if so, simply switch the current context to the existing one.
+    if existingResultingCtx, exists := o.rawConfig.Contexts[withContextName]; !exists || !isContextEqual(fromContext, existingResultingCtx) {
+        o.rawConfig.Contexts[withContextName] = fromContext
+    }
+    o.rawConfig.CurrentContext = withContextName
+
+    fmt.Fprintf(o.Out, "namespace changed to %q\n", fromContext.Namespace)
+    return clientcmd.ModifyConfig(configAccess, o.rawConfig, true)
 }
