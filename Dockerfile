@@ -26,14 +26,16 @@ RUN (   set -x; cd "$(mktemp -d)" &&   OS="$(uname | tr '[:upper:]' '[:lower:]')
 ENV KREW_ROOT=/root/.krew \
     PATH="/root/.krew/bin:${PATH}"
 
-RUN curl -L 'https://go.dev/dl/go1.21.5.linux-amd64.tar.gz' -o go.tar.gz && \
-    tar -C /app/ -xvzf go.tar.gz && \
-    cd /app/go/src && \
+RUN mkdir /local-go && \
+    cd /local-go && \
+    curl -L 'https://go.dev/dl/go1.21.5.linux-amd64.tar.gz' -o go.tar.gz && \
+    tar -C /local-go/ -xvzf go.tar.gz && \
+    cd /local-go/go/src && \
     ./make.bash && \
-    mv /app/go/bin/go /usr/local/bin && \
-    rm /app/go.tar.gz
+    mv /local-go/go/bin/go /usr/local/bin && \
+    rm /local-go/go.tar.gz
 
-ENV GOROOT=/app/go
+ENV GOROOT=/local-go/go
 
 COPY go.mod go.sum README.md /app/
 
