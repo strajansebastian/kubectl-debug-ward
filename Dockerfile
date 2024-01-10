@@ -37,12 +37,11 @@ RUN mkdir /local-go && \
 
 ENV GOROOT=/local-go/go
 
-COPY go.mod go.sum README.md /app/
-
 RUN apt update && \
     apt install -y vim mlocate && \
     rm -rf /var/lib/apt/lists/*
 
+COPY go.mod go.sum README.md /app/
 RUN go mod download
 
 COPY release /app/release

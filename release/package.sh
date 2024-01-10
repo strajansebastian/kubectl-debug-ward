@@ -27,5 +27,14 @@ cat release/manifest.yaml | sed -r "s/DEBUG_WARD_MANIFEST_VERSION/$DEBUG_WARD_VE
 echo "### check results ###"
 echo "ls -lah ${DEBUG_WARD_ARCHIVE_PATH}"
 
+echo "### update krew"
+echo "kubectl krew update"
+kubectl krew update
+
+echo "### uninstall debug-ward"
+echo "kubectl krew uninstall debug-ward"
+kubectl krew uninstall debug-ward
+
 echo "### install plugin"
 echo "kubectl krew install --manifest=$DEBUG_WARD_ARCHIVE_MANIFEST_FULLPATH --archive=$DEBUG_WARD_ARCHIVE_FULLPATH"
+kubectl krew install --manifest=$DEBUG_WARD_ARCHIVE_MANIFEST_FULLPATH --archive=$DEBUG_WARD_ARCHIVE_FULLPATH

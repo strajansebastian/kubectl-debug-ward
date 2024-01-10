@@ -1,6 +1,7 @@
 /*
 Copyright 2018 The Kubernetes Authors.
 
+            // Check for the next line that contains the resource name
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -22,9 +23,12 @@ import (
     "context"
     "fmt"
     "path/filepath"
+    // "time"
     "os"
     "gopkg.in/yaml.v3"
     "strings"
+    "regexp"
+    // "reflect"
 
     "github.com/spf13/cobra"
 
@@ -41,18 +45,21 @@ import (
 
     "k8s.io/cli-runtime/pkg/genericclioptions"
     "k8s.io/cli-runtime/pkg/genericiooptions"
+    "k8s.io/cli-runtime/pkg/printers"
+    "k8s.io/client-go/kubernetes/scheme"
+
 )
 
 var (
     runExample = `
     # with dry-run set to true will create a YAML file of what will be created if set to false
-    %[1]s copy -n pod-namespace -p pod --dry-run true
+    %[1]s debug-ward -n pod-namespace pod --dry-run true
 
     # examples of pod secuirty context values that can be ovewritten
-    %[1]s copy -n pod-namespace -p pod --dry-run true --psc-runasuser 0 --psc-runasgroup 0 --psc-fsgroup 0 --psc-fsgroupchangepolicy Always --psc-selinuxoptions "IMPLEMENTE_ME" --psc-seccompprofile "IMPLEMENT_ME" --psc-supplementalgroups "IMPLEMENT_1,IMPLEMENT_2" --psc-sysctls "IMPLEMENT_ME_1,IMPLEMENTE_ME_2"
+    %[1]s debug-ward -n pod-namespace pod --dry-run true --psc-runasuser 0 --psc-runasgroup 0 --psc-fsgroup 0 --psc-fsgroupchangepolicy Always --psc-selinuxoptions "IMPLEMENTE_ME" --psc-seccompprofile "IMPLEMENT_ME" --psc-supplementalgroups "IMPLEMENT_1,IMPLEMENT_2" --psc-sysctls "IMPLEMENT_ME_1,IMPLEMENTE_ME_2"
 
     # examples of pod constainer secuirty context values that can be ovewritten
-    %[1]s copy -n pod-namespace -p pod --dry-run true --pcsc-allowprivilegeescalation true --pcsc-capabilities "IMPLEMENT_ME" --pcsc-privileged true --pcsc-procmount "IMPLEMENT_ME" --pcsc-readonlyfilesystem false --pcsc-runasuser 0 --pcsc-runasgroup 0 --pcsc-runasnonroot false --pcsc-selinuxoptions "IMPLEMENTE_ME" --pcsc-seccompprofile "IMPLEMENT_ME"
+    %[1]s debug-ward -n pod-namespace pod --dry-run true --pcsc-allowprivilegeescalation true --pcsc-capabilities "IMPLEMENT_ME" --pcsc-privileged true --pcsc-procmount "IMPLEMENT_ME" --pcsc-readonlyfilesystem false --pcsc-runasuser 0 --pcsc-runasgroup 0 --pcsc-runasnonroot false --pcsc-selinuxoptions "IMPLEMENTE_ME" --pcsc-seccompprofile "IMPLEMENT_ME"
 `
 
     errNoContext = fmt.Errorf("no context is currently set, use %q to select a new one", "kubectl config use-context <context>")
@@ -88,25 +95,25 @@ type DebugWardOptions struct {
     debugPodCommand    string
 
     // security overrides
-    debugPodSecurityContextRunAsUser           int
-    debugPodSecurityContextRunAsGroup          int
-    debugPodSecurityContextFsGroup             int
-    debugPodSecurityContextFsGroupChangePolicy string
-    debugPodSecurityContextSeLinuxOptions      string
-    debugPodSecurityContextSeccompProfile      string
-    debugPodSecurityContextSupplementalGroups  []int
-    debugPodSecurityContextSysctls             []string
+    debugPodSecurityContextRunAsUser           *int64
+    debugPodSecurityContextRunAsGroup          *int64
+    debugPodSecurityContextFSGroup             *int64
+    // debugPodSecurityContextFSGroupChangePolicy *corev1.PodFSGroupChangePolicy
+    debugPodSecurityContextSELinuxOptions      *corev1.SELinuxOptions
+    debugPodSecurityContextSeccompProfile      *corev1.SeccompProfile
+    debugPodSecurityContextSupplementalGroups  []int64
+    debugPodSecurityContextSysctls             []corev1.Sysctl
 
-    debugPodContainerSecurityContextAllowPrivilegeEscalation bool
-    debugPodContainerSecurityContextCapabilities             string
-    debugPodContainerSecurityContextPriviledged              bool
-    debugPodContainerSecurityContextProcMount                string
-    debugPodContainerSecurityContextReadOnlyRootFilesystem   bool
-    debugPodContainerSecurityContextRunAsUser                int
-    debugPodContainerSecurityContextRunAsGroup               int
-    debugPodContainerSecurityContextRunAsNonRoot             bool
-    debugPodContainerSecurityContextSeLinuxOptions           string
-    debugPodContainerSecurityContextSeccompProfile           string
+    // debugPodContainerSecurityContextAllowPrivilegeEscalation bool
+    // debugPodContainerSecurityContextCapabilities             *corev1.Capabilities
+    // debugPodContainerSecurityContextPrivileged               *bool
+    debugPodContainerSecurityContextProcMount                *corev1.ProcMountType
+    // debugPodContainerSecurityContextReadOnlyRootFilesystem   *bool
+    debugPodContainerSecurityContextRunAsUser                *int64
+    debugPodContainerSecurityContextRunAsGroup               *int64
+    // debugPodContainerSecurityContextRunAsNonRoot             *bool
+    debugPodContainerSecurityContextSELinuxOptions           *corev1.SELinuxOptions
+    debugPodContainerSecurityContextSeccompProfile           *corev1.SeccompProfile
 
     rawConfig      api.Config
     listNamespaces bool
@@ -143,25 +150,25 @@ func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
         debugPodImage: "ubuntu:22.04",
         debugPodCommand: "bash",
 
-        debugPodSecurityContextRunAsUser: 0,
-        debugPodSecurityContextRunAsGroup: 0,
-        debugPodSecurityContextFsGroup: 0,
-        debugPodSecurityContextFsGroupChangePolicy: "Always",
-        debugPodSecurityContextSeLinuxOptions: "",
-        debugPodSecurityContextSeccompProfile: "",
-        debugPodSecurityContextSupplementalGroups: []int{},
-        debugPodSecurityContextSysctls: []string{},
+        debugPodSecurityContextRunAsUser: new(int64),
+        debugPodSecurityContextRunAsGroup: new(int64),
+        debugPodSecurityContextFSGroup: new(int64),
+	// debugPodSecurityContextFSGroupChangePolicy: corev1.PodFSGroupChangeAlways,
+        debugPodSecurityContextSELinuxOptions: &corev1.SELinuxOptions{},
+        debugPodSecurityContextSeccompProfile: &corev1.SeccompProfile{},
+        debugPodSecurityContextSupplementalGroups: []int64{},
+        debugPodSecurityContextSysctls: []corev1.Sysctl{},
 
-        debugPodContainerSecurityContextAllowPrivilegeEscalation: true,
-        debugPodContainerSecurityContextCapabilities: "",
-        debugPodContainerSecurityContextPriviledged: true,
-        debugPodContainerSecurityContextProcMount: "",
-        debugPodContainerSecurityContextReadOnlyRootFilesystem: false,
-        debugPodContainerSecurityContextRunAsUser: 0,
-        debugPodContainerSecurityContextRunAsGroup: 0,
-        debugPodContainerSecurityContextRunAsNonRoot: false,
-        debugPodContainerSecurityContextSeLinuxOptions: "",
-        debugPodContainerSecurityContextSeccompProfile: "",
+        // debugPodContainerSecurityContextAllowPrivilegeEscalation: &corev1.AllowPrivilegeEscalation{},
+        // debugPodContainerSecurityContextCapabilities: corev1.Capabilities,
+        // debugPodContainerSecurityContextPrivileged: true,
+        // debugPodContainerSecurityContextProcMount: &corev1.ProcMountType,
+        // debugPodContainerSecurityContextReadOnlyRootFilesystem: false,
+        debugPodContainerSecurityContextRunAsUser: new(int64),
+        debugPodContainerSecurityContextRunAsGroup: new(int64),
+        // debugPodContainerSecurityContextRunAsNonRoot: false,
+        debugPodContainerSecurityContextSELinuxOptions: &corev1.SELinuxOptions{},
+        debugPodContainerSecurityContextSeccompProfile: &corev1.SeccompProfile{},
 
         IOStreams: streams,
     }
@@ -173,7 +180,7 @@ func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
     o := NewDebugWardOptions(streams)
 
     cmd := &cobra.Command{
-        Use:          "debug-ward [new-namespace] [flags]",
+        Use:          "debug-ward pod-name [flags]",
         Short:        "View or create a copy of a specified pod that can be used for debugging in a new namespace or cluster",
         Example:      fmt.Sprintf(runExample, "kubectl"),
         SilenceUsage: true,
@@ -192,12 +199,8 @@ func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
         },
     }
 
-    cmd.Flags().StringVar(&o.sourcePodCluster, "cluster", o.sourcePodCluster, "defaults to ")
-    cmd.Flags().StringVar(&o.sourcePodUser, "user", o.sourcePodUser, "defaults to ")
-    cmd.Flags().StringVar(&o.sourcePodContext, "context", o.sourcePodContext, "defaults to ")
-    cmd.Flags().StringVar(&o.sourcePodNamespace, "namespace", o.sourcePodNamespace, "defaults to default")
     cmd.Flags().BoolVar(&o.dryRun, "dry-run", o.dryRun, "if true, print the yaml of the pod that is going to be created in the debug-ward namespace; default true")
-    // o.configFlags.AddFlags(cmd.Flags())
+    o.configFlags.AddFlags(cmd.Flags())
 
     return cmd
 }
@@ -221,20 +224,20 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
     }
 
     // Load kubeconfig
-    // config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-    // if err != nil {
-    //     log.Fatal(err)
-    // }
+    config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     o.rawConfig, err = o.configFlags.ToRawKubeConfigLoader().RawConfig()
     if err != nil {
         return err
     }
 
-    // o.srcK8sClient, err = kubernetes.NewForConfig(config)
-    // if err != nil {
-    //     log.Fatal("Error creating Kubernetes source client: \n", err)
-    // }
+    o.srcK8sClient, err = kubernetes.NewForConfig(config)
+    if err != nil {
+        log.Fatal("Error creating Kubernetes source client: \n", err)
+    }
 
     o.dryRun, err = cmd.Flags().GetBool("dry-run")
     if err != nil {
@@ -269,19 +272,15 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
         return err
     }
 
-    log.Trace("setting context s10...")
     currentContext, exists := o.rawConfig.Contexts[o.rawConfig.CurrentContext]
     if !exists {
-	log.Trace("setting context s10001...")
         return errNoContext
     }
 
-    log.Trace("setting context s11...")
     o.resultingContext = api.NewContext()
     o.resultingContext.Cluster = currentContext.Cluster
     o.resultingContext.AuthInfo = currentContext.AuthInfo
 
-    log.Trace("setting context s12...")
     // if a target context is explicitly provided by the user,
     // use that as our reference for the final, resulting context
     if len(o.sourcePodContext) > 0 {
@@ -290,8 +289,6 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
             o.resultingContext = userCtx.DeepCopy()
         }
     }
-
-    log.Trace("setting context s13...")
 
     // override context info with user provided values
     o.resultingContext.Namespace = o.sourcePodNamespace
@@ -350,8 +347,11 @@ func (o *DebugWardOptions) Validate() error {
     if len(o.rawConfig.CurrentContext) == 0 {
         return errNoContext
     }
+    if len(o.args) != 1 {
+        return fmt.Errorf("provide the name of the pod that will be cloned in the debug-ward")
+    }
     if len(o.args) > 1 {
-        return fmt.Errorf("either one or no arguments are allowed")
+        return fmt.Errorf("too many arguments provided")
     }
 
     return nil
@@ -360,33 +360,46 @@ func (o *DebugWardOptions) Validate() error {
 // Run copy of debug pod using the provided options
 func (o *DebugWardOptions) Run() error {
     log.Trace("Starting Run")
-    // if len(o.sourcePodNamespace) > 0 && o.resultingContext != nil {
-    //     return o.setNamespace(o.resultingContext, o.resultingContextName)
-    // }
 
+    o.sourcePodName = o.args[0]
+    log.Debug("pod name ", o.sourcePodName)
+
+    log.Trace("Starting Run: get pod")
     pod, err := o.srcK8sClient.CoreV1().Pods(o.sourcePodNamespace).Get(context.TODO(), o.sourcePodName, metav1.GetOptions{})
     if err != nil {
         return err
     }
 
-    // Get associated secrets and config maps
+    log.Trace("Starting Run: get Secrets")
     secrets, err := getSecretsFromPod(o.srcK8sClient, pod)
     if err != nil {
         return err
     }
 
+    log.Trace("Starting Run: get ConfigMaps")
     configMaps, err := getConfigMapsFromPod(o.srcK8sClient, pod)
     if err != nil {
         return err
     }
 
+    //
+    // cleanup
+    //
+    podClean := cleanPod(pod)
+    configMapsClean := cleanConfigMaps(configMaps)
+    secretsClean := cleanSecrets(secrets)
+
+    podTreat := o.treatPod(podClean)
+    configMapsTreat := treatConfigMaps(configMapsClean)
+    secretsTreat := treatSecrets(secretsClean)
+
     // ###################
     // remove secrets/ configMap duplicates to avoid errors during creation
     // ###################
     if o.dryRun == true {
-        o.debugWardDryRun(pod, configMaps, secrets)
+        o.debugWardDryRun(podTreat, configMapsTreat, secretsTreat)
     } else {
-        o.debugWardCopy(pod, configMaps, secrets)
+        o.debugWardCopy(podTreat, configMapsTreat, secretsTreat)
     }
 
 
@@ -395,33 +408,27 @@ func (o *DebugWardOptions) Run() error {
 
 func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
     log.Trace("Starting debugWardDryRun")
-    log.Info("\n# ConfigMaps YAML")
+
+    printr := printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.YAMLPrinter{})
+
     for _, configMap := range configMaps {
-        log.Info("\n---")
-        configMapYAML, err := yaml.Marshal(configMap)
+        err := printr.PrintObj(configMap, os.Stdout)
         if err != nil {
-            return err
+            log.Panic(err)
         }
-        log.Info(string(configMapYAML))
     }
 
-    log.Info("\n# Secrets YAML")
     for _, secret := range secrets {
-        log.Info("\n---")
-        secretYAML, err := yaml.Marshal(secret)
+        err := printr.PrintObj(secret, os.Stdout)
         if err != nil {
-            return err
+            log.Panic(err)
         }
-        log.Info(string(secretYAML))
     }
 
-    log.Info("\n# Pod YAML")
-    log.Info("\n---")
-    podYAML, err := yaml.Marshal(pod)
+    err := printr.PrintObj(pod, os.Stdout)
     if err != nil {
-        return err
+       log.Panic(err)
     }
-    log.Info(string(podYAML))
 
     return nil
 }
@@ -533,6 +540,194 @@ func getConfigMapsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*
     return configMaps, nil
 }
 
+func cleanPod(pod *corev1.Pod) (*corev1.Pod) {
+    log.Trace("Starting cleanPod")
+    // main fields
+    pod.ObjectMeta.CreationTimestamp = metav1.Time{}
+    pod.ObjectMeta.ManagedFields = nil
+    pod.ObjectMeta.OwnerReferences = nil
+    pod.Status = corev1.PodStatus{}
+
+    // meta fields
+    pod.ObjectMeta.GenerateName = ""
+    pod.ObjectMeta.Namespace = ""
+    pod.ObjectMeta.ResourceVersion = ""
+    pod.ObjectMeta.UID = ""
+    for label := range pod.ObjectMeta.Labels {
+        delete(pod.ObjectMeta.Labels, label)
+    }
+
+    // spec fields pod
+    pod.Spec.DNSPolicy = ""
+    pod.Spec.NodeName = ""
+    pod.Spec.SchedulerName = ""
+
+    regexVolumeKubeApiAccess, err := regexp.Compile("^kube-api-access-[a-z]{1,16}")
+    if err != nil {
+        log.Panic("Error compiling regex: %v\n", err)
+    }
+
+    volumesRemoved := []string{}
+    for _, volume := range pod.Spec.Volumes {
+        log.Trace("checking if removal is applied on volume " , volume.Name)
+        if regexVolumeKubeApiAccess.MatchString(volume.Name) {
+            volumesRemoved = append(volumesRemoved, volume.Name)
+        }
+    }
+    for _, vrName := range volumesRemoved {
+        pod.Spec.Volumes = deleteVolume(pod.Spec.Volumes, vrName)
+    }
+
+    // spec fields containers
+    for ic, container := range pod.Spec.Containers {
+        log.Debug("removing from container %s probes", container.Name)
+        pod.Spec.Containers[ic].LivenessProbe = nil
+        pod.Spec.Containers[ic].ReadinessProbe = nil
+        pod.Spec.Containers[ic].StartupProbe = nil
+        log.Debug("removing from container %s resource limits/requests", container.Name)
+        pod.Spec.Containers[ic].Resources = corev1.ResourceRequirements{}
+        log.Trace("removing from container %s volume mounts", container.Name)
+        for _, vrmName := range volumesRemoved {
+            pod.Spec.Containers[ic].VolumeMounts = deleteVolumeMount(pod.Spec.Containers[ic].VolumeMounts, vrmName)
+        }
+    }
+
+    return pod
+}
+
+func (o *DebugWardOptions) treatPod(pod *corev1.Pod) (*corev1.Pod) {
+    log.Trace("Starting treatPod")
+
+    pod.ObjectMeta.Labels = map[string]string{
+        "debug-ward": "true",
+    }
+
+    // set escalated priviledges
+    pod.Spec.SecurityContext.RunAsUser = o.debugPodSecurityContextRunAsUser
+    pod.Spec.SecurityContext.RunAsGroup = o.debugPodSecurityContextRunAsGroup
+    pod.Spec.SecurityContext.FSGroup = o.debugPodSecurityContextFSGroup
+    // pod.Spec.SecurityContext.FSGroupChangePolicy = o.debugPodSecurityContextFSGroupChangePolicy
+    // pod.Spec.SecurityContext.SELinuxOptions = o.debugPodSecurityContextSELinuxOptions
+    // pod.Spec.SecurityContext.SeccompProfile = o.debugPodSecurityContextSeccompProfile
+    pod.Spec.SecurityContext.SupplementalGroups = o.debugPodSecurityContextSupplementalGroups
+    pod.Spec.SecurityContext.Sysctls = o.debugPodSecurityContextSysctls
+
+    // set escalated priviledges for each container
+    for _, container := range pod.Spec.Containers {
+       // container.SecurityContext.AllowPrivilegeEscalation = o.debugPodContainerSecurityContextAllowPrivilegeEscalation
+       // container.SecurityContext.Capabilities = o.debugPodContainerSecurityContextCapabilities
+       // container.SecurityContext.Privileged = o.debugPodContainerSecurityContextPrivileged
+       // container.SecurityContext.ProcMount = o.debugPodContainerSecurityContextProcMount
+       // container.SecurityContext.ReadOnlyRootFilesystem = o.debugPodContainerSecurityContextReadOnlyRootFilesystem
+       container.SecurityContext.RunAsUser = o.debugPodContainerSecurityContextRunAsUser
+       container.SecurityContext.RunAsGroup = o.debugPodContainerSecurityContextRunAsGroup
+       // container.SecurityContext.RunAsNonRoot = o.debugPodContainerSecurityContextRunAsNonRoot
+       // container.SecurityContext.SELinuxOptions = o.debugPodContainerSecurityContextSELinuxOptions
+       // container.SecurityContext.SeccompProfile = o.debugPodContainerSecurityContextSeccompProfile
+    }
+
+
+    return pod
+}
+
+func deleteVolume(volumes []corev1.Volume, elementToDelete string) []corev1.Volume {
+    log.Debug("deleting volume ", elementToDelete)
+
+    var updatedVolumes []corev1.Volume
+
+    for _, volume := range volumes {
+        if volume.Name != elementToDelete {
+            updatedVolumes = append(updatedVolumes, volume)
+        }
+    }
+
+    return updatedVolumes
+}
+
+func deleteVolumeMount(volumes []corev1.VolumeMount, elementToDelete string) []corev1.VolumeMount {
+    log.Debug("deleting volume ", elementToDelete)
+
+    var updatedVolumes []corev1.VolumeMount
+
+    for _, volume := range volumes {
+        if volume.Name != elementToDelete {
+            updatedVolumes = append(updatedVolumes, volume)
+        }
+    }
+
+    return updatedVolumes
+}
+
+func cleanConfigMaps(configMaps []*corev1.ConfigMap) ([]*corev1.ConfigMap) {
+    log.Trace("Starting cleanConfigMaps")
+
+    for icm, configMap := range configMaps {
+        configMaps[icm] = cleanConfigMap(configMap)
+    }
+
+    return configMaps
+}
+
+func cleanConfigMap(configMap *corev1.ConfigMap) (*corev1.ConfigMap) {
+    log.Trace("Starting cleanConfigMap")
+
+    // main fields
+    configMap.ObjectMeta.CreationTimestamp = metav1.Time{}
+    configMap.ObjectMeta.ManagedFields = nil
+    configMap.ObjectMeta.Namespace = ""
+    configMap.ObjectMeta.UID = ""
+    configMap.ObjectMeta.ResourceVersion = ""
+
+    return configMap
+}
+
+func cleanSecrets(secrets []*corev1.Secret) ([]*corev1.Secret) {
+    log.Trace("Starting cleanSecrets")
+
+    for isec, secret := range secrets {
+        secrets[isec] = cleanSecret(secret)
+    }
+
+    return secrets
+}
+
+func cleanSecret(secret *corev1.Secret) (*corev1.Secret) {
+    log.Trace("Starting cleanSecret")
+
+    // main fields
+    secret.ObjectMeta.CreationTimestamp = metav1.Time{}
+    secret.ObjectMeta.ManagedFields = nil
+    secret.ObjectMeta.Namespace = ""
+    secret.ObjectMeta.UID = ""
+    secret.ObjectMeta.ResourceVersion = ""
+
+    return secret
+}
+
+func treatConfigMaps(configMaps []*corev1.ConfigMap) ([]*corev1.ConfigMap) {
+    log.Trace("Starting treatConfigMap")
+
+    for icm, _ := range configMaps {
+        configMaps[icm].ObjectMeta.Labels = map[string]string{
+            "debug-ward": "true",
+        }
+    }
+
+    return configMaps
+}
+
+func treatSecrets(secrets []*corev1.Secret) ([]*corev1.Secret) {
+    log.Trace("Starting treatSecret")
+
+    for isec, _ := range secrets {
+        secrets[isec].ObjectMeta.Labels = map[string]string{
+            "debug-ward": "true",
+        }
+    }
+
+    return secrets
+}
+
 func createResource(clientset *kubernetes.Clientset, yamlData []byte, resourceType string) error {
     log.Trace("Starting createResource")
     // Create resource in the cluster
@@ -602,21 +797,3 @@ func isContextEqual(ctxA, ctxB *api.Context) bool {
     return true
 }
 
-func (o *DebugWardOptions) setNamespace(fromContext *api.Context, withContextName string) error {
-    log.Trace("Starting setNamespace")
-    if len(fromContext.Namespace) == 0 {
-        return fmt.Errorf("a non-empty namespace must be provided")
-    }
-
-    configAccess := clientcmd.NewDefaultPathOptions()
-
-    // determine if we have already saved this context to the user's KUBECONFIG before
-    // if so, simply switch the current context to the existing one.
-    if existingResultingCtx, exists := o.rawConfig.Contexts[withContextName]; !exists || !isContextEqual(fromContext, existingResultingCtx) {
-        o.rawConfig.Contexts[withContextName] = fromContext
-    }
-    o.rawConfig.CurrentContext = withContextName
-
-    fmt.Fprintf(o.Out, "namespace changed to %q\n", fromContext.Namespace)
-    return clientcmd.ModifyConfig(configAccess, o.rawConfig, true)
-}
