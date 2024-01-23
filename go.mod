@@ -5,9 +5,15 @@ go 1.21
 toolchain go1.21.5
 
 require (
+	github.com/samber/lo v1.39.0
+	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/pflag v1.0.5
+	gopkg.in/yaml.v3 v3.0.1
+	k8s.io/api v0.29.0
+	k8s.io/apimachinery v0.29.0
 	k8s.io/cli-runtime v0.29.0
+	k8s.io/client-go v0.29.0
 )
 
 require (
@@ -42,9 +48,9 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
 	go.starlark.net v0.0.0-20230525235612-a134d8f9ddca // indirect
+	golang.org/x/exp v0.0.0-20220303212507-bbda1eaf7a17 // indirect
 	golang.org/x/net v0.19.0 // indirect
 	golang.org/x/oauth2 v0.10.0 // indirect
 	golang.org/x/sync v0.5.0 // indirect
@@ -56,10 +62,6 @@ require (
 	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/api v0.29.0 // indirect
-	k8s.io/apimachinery v0.29.0 // indirect
-	k8s.io/client-go v0.29.0 // indirect
 	k8s.io/klog/v2 v2.110.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20231113174909-778a5567bc1e // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect

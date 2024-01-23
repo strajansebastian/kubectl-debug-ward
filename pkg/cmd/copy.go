@@ -25,9 +25,11 @@ import (
     "path/filepath"
     // "time"
     "os"
-    "gopkg.in/yaml.v3"
+    // "gopkg.in/yaml.v3"
     "strings"
     "regexp"
+    // "bytes"
+    "github.com/samber/lo"
     // "reflect"
 
     "github.com/spf13/cobra"
@@ -53,13 +55,34 @@ import (
 var (
     runExample = `
     # with dry-run set to true will create a YAML file of what will be created if set to false
-    %[1]s debug-ward -n pod-namespace pod --dry-run true
+    %[1]s debug-ward -n pod-namespace pod --dry-run=true
 
     # examples of pod secuirty context values that can be ovewritten
-    %[1]s debug-ward -n pod-namespace pod --dry-run true --psc-runasuser 0 --psc-runasgroup 0 --psc-fsgroup 0 --psc-fsgroupchangepolicy Always --psc-selinuxoptions "IMPLEMENTE_ME" --psc-seccompprofile "IMPLEMENT_ME" --psc-supplementalgroups "IMPLEMENT_1,IMPLEMENT_2" --psc-sysctls "IMPLEMENT_ME_1,IMPLEMENTE_ME_2"
+    %[1]s debug-ward -n pod-namespace pod --dry-run=true --psc-runasuser=0 --psc-runasgroup=0 --psc-fsgroup=0 --psc-fsgroupchangepolicy=Always --psc-selinuxoptions="IMPLEMENTE_ME" --psc-seccompprofile="IMPLEMENT_ME" --psc-supplementalgroups="IMPLEMENT_1,IMPLEMENT_2" --psc-sysctls="IMPLEMENT_ME_1,IMPLEMENTE_ME_2"
 
     # examples of pod constainer secuirty context values that can be ovewritten
-    %[1]s debug-ward -n pod-namespace pod --dry-run true --pcsc-allowprivilegeescalation true --pcsc-capabilities "IMPLEMENT_ME" --pcsc-privileged true --pcsc-procmount "IMPLEMENT_ME" --pcsc-readonlyfilesystem false --pcsc-runasuser 0 --pcsc-runasgroup 0 --pcsc-runasnonroot false --pcsc-selinuxoptions "IMPLEMENTE_ME" --pcsc-seccompprofile "IMPLEMENT_ME"
+    %[1]s debug-ward -n pod-namespace pod --dry-run=true --pcsc-allowprivilegeescalation=true --pcsc-capabilities="IMPLEMENT_ME" --pcsc-privileged=true --pcsc-procmount="IMPLEMENT_ME" --pcsc-readonlyfilesystem=false --pcsc-runasuser=0 --pcsc-runasgroup=0 --pcsc-runasnonroot=false --pcsc-selinuxoptions="IMPLEMENTE_ME" --pcsc-seccompprofile="IMPLEMENT_ME"
+
+    --debug-warn-namespace
+    --dry-run
+    --psc-runasuser
+    --psc-runasgroup
+    --psc-fsgroup
+    --psc-fsgroupchangepolicy
+    --psc-selinuxoptions
+    --psc-seccompprofile
+    --psc-supplementalgroups
+    --psc-sysctls
+    --pcsc-allowprivilegeescalation
+    --pcsc-capabilities
+    --pcsc-priviledges
+    --pcsc-procmount
+    --pcsc-readonlyfilesystem
+    --pcsc-runasuser
+    --pcsc-runasgroup
+    --pcsc-runasnonroot
+    --pcsc-selinuxoptions
+    --pcsc-seccompprofile
 `
 
     errNoContext = fmt.Errorf("no context is currently set, use %q to select a new one", "kubectl config use-context <context>")
@@ -106,12 +129,12 @@ type DebugWardOptions struct {
 
     // debugPodContainerSecurityContextAllowPrivilegeEscalation bool
     // debugPodContainerSecurityContextCapabilities             *corev1.Capabilities
-    // debugPodContainerSecurityContextPrivileged               *bool
+    debugPodContainerSecurityContextPrivileged               *bool
     debugPodContainerSecurityContextProcMount                *corev1.ProcMountType
-    // debugPodContainerSecurityContextReadOnlyRootFilesystem   *bool
+    debugPodContainerSecurityContextReadOnlyRootFilesystem   *bool
     debugPodContainerSecurityContextRunAsUser                *int64
     debugPodContainerSecurityContextRunAsGroup               *int64
-    // debugPodContainerSecurityContextRunAsNonRoot             *bool
+    debugPodContainerSecurityContextRunAsNonRoot             *bool
     debugPodContainerSecurityContextSELinuxOptions           *corev1.SELinuxOptions
     debugPodContainerSecurityContextSeccompProfile           *corev1.SeccompProfile
 
@@ -150,10 +173,10 @@ func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
         debugPodImage: "ubuntu:22.04",
         debugPodCommand: "bash",
 
-        debugPodSecurityContextRunAsUser: new(int64),
-        debugPodSecurityContextRunAsGroup: new(int64),
-        debugPodSecurityContextFSGroup: new(int64),
-	// debugPodSecurityContextFSGroupChangePolicy: corev1.PodFSGroupChangeAlways,
+        debugPodSecurityContextRunAsUser: lo.ToPtr(int64(0)),
+        debugPodSecurityContextRunAsGroup: lo.ToPtr(int64(0)),
+        debugPodSecurityContextFSGroup: lo.ToPtr(int64(0)),
+    // debugPodSecurityContextFSGroupChangePolicy: corev1.PodFSGroupChangeAlways,
         debugPodSecurityContextSELinuxOptions: &corev1.SELinuxOptions{},
         debugPodSecurityContextSeccompProfile: &corev1.SeccompProfile{},
         debugPodSecurityContextSupplementalGroups: []int64{},
@@ -161,12 +184,12 @@ func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
 
         // debugPodContainerSecurityContextAllowPrivilegeEscalation: &corev1.AllowPrivilegeEscalation{},
         // debugPodContainerSecurityContextCapabilities: corev1.Capabilities,
-        // debugPodContainerSecurityContextPrivileged: true,
+        debugPodContainerSecurityContextPrivileged: lo.ToPtr(true),
         // debugPodContainerSecurityContextProcMount: &corev1.ProcMountType,
-        // debugPodContainerSecurityContextReadOnlyRootFilesystem: false,
-        debugPodContainerSecurityContextRunAsUser: new(int64),
-        debugPodContainerSecurityContextRunAsGroup: new(int64),
-        // debugPodContainerSecurityContextRunAsNonRoot: false,
+        debugPodContainerSecurityContextReadOnlyRootFilesystem: lo.ToPtr(false),
+        debugPodContainerSecurityContextRunAsUser: lo.ToPtr(int64(0)),
+        debugPodContainerSecurityContextRunAsGroup: lo.ToPtr(int64(0)),
+        debugPodContainerSecurityContextRunAsNonRoot: lo.ToPtr(false),
         debugPodContainerSecurityContextSELinuxOptions: &corev1.SELinuxOptions{},
         debugPodContainerSecurityContextSeccompProfile: &corev1.SeccompProfile{},
 
@@ -200,6 +223,7 @@ func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
     }
 
     cmd.Flags().BoolVar(&o.dryRun, "dry-run", o.dryRun, "if true, print the yaml of the pod that is going to be created in the debug-ward namespace; default true")
+    cmd.Flags().StringVar(&o.debugPodNamespace, "debug-warn-namespace", o.debugPodNamespace, "if set will use this value as the debug-ward namespace; default ....SPECIFY....")
     o.configFlags.AddFlags(cmd.Flags())
 
     return cmd
@@ -244,6 +268,12 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
         return err
     }
     log.Trace("flag: dry-run set to ", o.dryRun)
+
+    o.debugPodNamespace, err = cmd.Flags().GetString("debug-warn-namespace")
+    if err != nil {
+        return err
+    }
+    log.Trace("flag: debug-warn-namespace set to ", o.debugPodNamespace)
 
     o.sourcePodNamespace, err = cmd.Flags().GetString("namespace")
     if err != nil {
@@ -371,13 +401,13 @@ func (o *DebugWardOptions) Run() error {
     }
 
     log.Trace("Starting Run: get Secrets")
-    secrets, err := getSecretsFromPod(o.srcK8sClient, pod)
+    secrets, err := o.getSecretsFromPod(pod)
     if err != nil {
         return err
     }
 
     log.Trace("Starting Run: get ConfigMaps")
-    configMaps, err := getConfigMapsFromPod(o.srcK8sClient, pod)
+    configMaps, err := o.getConfigMapsFromPod(pod)
     if err != nil {
         return err
     }
@@ -390,8 +420,8 @@ func (o *DebugWardOptions) Run() error {
     secretsClean := cleanSecrets(secrets)
 
     podTreat := o.treatPod(podClean)
-    configMapsTreat := treatConfigMaps(configMapsClean)
-    secretsTreat := treatSecrets(secretsClean)
+    configMapsTreat := o.treatConfigMaps(configMapsClean)
+    secretsTreat := o.treatSecrets(secretsClean)
 
     // ###################
     // remove secrets/ configMap duplicates to avoid errors during creation
@@ -412,6 +442,7 @@ func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1
     printr := printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.YAMLPrinter{})
 
     for _, configMap := range configMaps {
+        fmt.Sprintf("\n---")
         err := printr.PrintObj(configMap, os.Stdout)
         if err != nil {
             log.Panic(err)
@@ -419,12 +450,14 @@ func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1
     }
 
     for _, secret := range secrets {
+        fmt.Sprintf("\n---")
         err := printr.PrintObj(secret, os.Stdout)
         if err != nil {
             log.Panic(err)
         }
     }
 
+    fmt.Sprintf("\n---")
     err := printr.PrintObj(pod, os.Stdout)
     if err != nil {
        log.Panic(err)
@@ -435,41 +468,47 @@ func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1
 
 func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
     log.Trace("Starting debugWardCopy")
-    log.Info("\n# ConfigMaps YAML")
+
+    // printr := printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.YAMLPrinter{})
+
+    // var yamlBuffer bytes.Buffer
+
     for _, configMap := range configMaps {
-        log.Info("\n---")
-        configMapYAML, err := yaml.Marshal(configMap)
-        if err != nil {
-            return err
-        }
-        err = createResource(o.srcK8sClient, configMapYAML, "ConfigMap")
+        // err := printr.PrintObj(configMap, &yamlBuffer)
+        // if err != nil {
+        //     return err
+        // }
+	tmpConfigMap, err := o.srcK8sClient.CoreV1().ConfigMaps(o.debugPodNamespace).Create(context.TODO(), configMap, metav1.CreateOptions{})
+	log.Debug(tmpConfigMap)
         if err != nil {
             log.Fatal("Error creating ConfigMap: ", err)
         }
         log.Info("ConfigMap created successfully.")
     }
 
-    log.Info("\n# Secrets YAML")
     for _, secret := range secrets {
-        log.Info("\n---")
-        secretYAML, err := yaml.Marshal(secret)
-        if err != nil {
-            return err
-        }
-        err = createResource(o.srcK8sClient, secretYAML, "Secret")
+        // err := printr.PrintObj(secret, &yamlBuffer)
+        // if err != nil {
+        //     return err
+        // }
+	tmpSecret, err := o.srcK8sClient.CoreV1().Secrets(o.debugPodNamespace).Create(context.TODO(), secret, metav1.CreateOptions{})
+	log.Debug(tmpSecret)
+        // err = o.createResource(o.srcK8sClient, yamlBuffer.Bytes(), "Secret")
         if err != nil {
             log.Fatal("Error creating Secret: ", err)
         }
         log.Info("Secret created successfully.")
     }
 
-    log.Info("\n# Pod YAML")
-    log.Info("\n---")
-    podYAML, err := yaml.Marshal(pod)
-    if err != nil {
-        return err
-    }
-    err = createResource(o.srcK8sClient, podYAML, "Pod")
+    // var podBuffer bytes.Buffer
+    // err := printr.PrintObj(pod, &podBuffer)
+    // if err != nil {
+    //     return err
+    // }
+    // fmt.Sprintf(podBuffer.String())
+    tmpPod, err := o.srcK8sClient.CoreV1().Pods(o.debugPodNamespace).Create(context.TODO(), pod, metav1.CreateOptions{})
+    log.Debug(tmpPod)
+    // err = o.createResource(o.srcK8sClient, configBuffer.Bytes(), "Pod")
     if err != nil {
         log.Fatal("Error creating Pod: ", err)
     }
@@ -478,14 +517,14 @@ func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.C
     return nil
 }
 
-func getSecretsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*corev1.Secret, error) {
+func (o *DebugWardOptions) getSecretsFromPod(pod *corev1.Pod) ([]*corev1.Secret, error) {
     log.Trace("Starting getSecretsFromPod")
     var secrets []*corev1.Secret
 
     // Check volumes for secrets
     for _, volume := range pod.Spec.Volumes {
         if volume.Secret != nil {
-            secret, err := clientset.CoreV1().Secrets(pod.Namespace).Get(context.TODO(), volume.Secret.SecretName, metav1.GetOptions{})
+            secret, err := o.srcK8sClient.CoreV1().Secrets(pod.Namespace).Get(context.TODO(), volume.Secret.SecretName, metav1.GetOptions{})
             if err != nil {
                 return nil, err
             }
@@ -497,7 +536,7 @@ func getSecretsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*cor
     for _, container := range pod.Spec.Containers {
         for _, env := range container.Env {
             if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
-                secret, err := clientset.CoreV1().Secrets(pod.Namespace).Get(context.TODO(), env.ValueFrom.SecretKeyRef.Name, metav1.GetOptions{})
+                secret, err := o.srcK8sClient.CoreV1().Secrets(pod.Namespace).Get(context.TODO(), env.ValueFrom.SecretKeyRef.Name, metav1.GetOptions{})
                 if err != nil {
                     return nil, err
                 }
@@ -509,14 +548,14 @@ func getSecretsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*cor
     return secrets, nil
 }
 
-func getConfigMapsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*corev1.ConfigMap, error) {
+func (o *DebugWardOptions) getConfigMapsFromPod(pod *corev1.Pod) ([]*corev1.ConfigMap, error) {
     log.Trace("Starting getConfigMapsFromPod")
     var configMaps []*corev1.ConfigMap
 
     // Check volumes for config maps
     for _, volume := range pod.Spec.Volumes {
         if volume.ConfigMap != nil {
-            configMap, err := clientset.CoreV1().ConfigMaps(pod.Namespace).Get(context.TODO(), volume.ConfigMap.Name, metav1.GetOptions{})
+            configMap, err := o.srcK8sClient.CoreV1().ConfigMaps(pod.Namespace).Get(context.TODO(), volume.ConfigMap.Name, metav1.GetOptions{})
             if err != nil {
                 return nil, err
             }
@@ -528,7 +567,7 @@ func getConfigMapsFromPod(clientset *kubernetes.Clientset, pod *corev1.Pod) ([]*
     for _, container := range pod.Spec.Containers {
         for _, env := range container.Env {
             if env.ValueFrom != nil && env.ValueFrom.ConfigMapKeyRef != nil {
-                configMap, err := clientset.CoreV1().ConfigMaps(pod.Namespace).Get(context.TODO(), env.ValueFrom.ConfigMapKeyRef.Name, metav1.GetOptions{})
+                configMap, err := o.srcK8sClient.CoreV1().ConfigMaps(pod.Namespace).Get(context.TODO(), env.ValueFrom.ConfigMapKeyRef.Name, metav1.GetOptions{})
                 if err != nil {
                     return nil, err
                 }
@@ -580,13 +619,13 @@ func cleanPod(pod *corev1.Pod) (*corev1.Pod) {
 
     // spec fields containers
     for ic, container := range pod.Spec.Containers {
-        log.Debug("removing from container %s probes", container.Name)
+        log.Debug("removing from container %v probes", container.Name)
         pod.Spec.Containers[ic].LivenessProbe = nil
         pod.Spec.Containers[ic].ReadinessProbe = nil
         pod.Spec.Containers[ic].StartupProbe = nil
-        log.Debug("removing from container %s resource limits/requests", container.Name)
+        log.Debug("removing from container %v resource limits/requests", container.Name)
         pod.Spec.Containers[ic].Resources = corev1.ResourceRequirements{}
-        log.Trace("removing from container %s volume mounts", container.Name)
+        log.Trace("removing from container %v volume mounts", container.Name)
         for _, vrmName := range volumesRemoved {
             pod.Spec.Containers[ic].VolumeMounts = deleteVolumeMount(pod.Spec.Containers[ic].VolumeMounts, vrmName)
         }
@@ -598,11 +637,17 @@ func cleanPod(pod *corev1.Pod) (*corev1.Pod) {
 func (o *DebugWardOptions) treatPod(pod *corev1.Pod) (*corev1.Pod) {
     log.Trace("Starting treatPod")
 
+    pod.ObjectMeta.Namespace = o.debugPodNamespace
     pod.ObjectMeta.Labels = map[string]string{
         "debug-ward": "true",
     }
 
     // set escalated priviledges
+    if pod.Spec.SecurityContext == nil {
+        log.Trace("treatPod on pod with empty SecurityContext")
+        pod.Spec.SecurityContext = &corev1.PodSecurityContext{}
+    }
+
     pod.Spec.SecurityContext.RunAsUser = o.debugPodSecurityContextRunAsUser
     pod.Spec.SecurityContext.RunAsGroup = o.debugPodSecurityContextRunAsGroup
     pod.Spec.SecurityContext.FSGroup = o.debugPodSecurityContextFSGroup
@@ -613,15 +658,22 @@ func (o *DebugWardOptions) treatPod(pod *corev1.Pod) (*corev1.Pod) {
     pod.Spec.SecurityContext.Sysctls = o.debugPodSecurityContextSysctls
 
     // set escalated priviledges for each container
-    for _, container := range pod.Spec.Containers {
+    for i, container := range pod.Spec.Containers {
+       log.Trace("treatPod on container ", container.Name)
+       if container.SecurityContext == nil {
+           log.Trace("treatPod on container with empty security context")
+           pod.Spec.Containers[i].SecurityContext = &corev1.SecurityContext{}
+       }
        // container.SecurityContext.AllowPrivilegeEscalation = o.debugPodContainerSecurityContextAllowPrivilegeEscalation
        // container.SecurityContext.Capabilities = o.debugPodContainerSecurityContextCapabilities
-       // container.SecurityContext.Privileged = o.debugPodContainerSecurityContextPrivileged
        // container.SecurityContext.ProcMount = o.debugPodContainerSecurityContextProcMount
-       // container.SecurityContext.ReadOnlyRootFilesystem = o.debugPodContainerSecurityContextReadOnlyRootFilesystem
-       container.SecurityContext.RunAsUser = o.debugPodContainerSecurityContextRunAsUser
-       container.SecurityContext.RunAsGroup = o.debugPodContainerSecurityContextRunAsGroup
-       // container.SecurityContext.RunAsNonRoot = o.debugPodContainerSecurityContextRunAsNonRoot
+
+       pod.Spec.Containers[i].SecurityContext.Privileged = o.debugPodContainerSecurityContextPrivileged
+       pod.Spec.Containers[i].SecurityContext.ReadOnlyRootFilesystem = o.debugPodContainerSecurityContextReadOnlyRootFilesystem
+       pod.Spec.Containers[i].SecurityContext.RunAsUser = o.debugPodContainerSecurityContextRunAsUser
+       pod.Spec.Containers[i].SecurityContext.RunAsGroup = o.debugPodContainerSecurityContextRunAsGroup
+       pod.Spec.Containers[i].SecurityContext.RunAsNonRoot = o.debugPodContainerSecurityContextRunAsNonRoot
+
        // container.SecurityContext.SELinuxOptions = o.debugPodContainerSecurityContextSELinuxOptions
        // container.SecurityContext.SeccompProfile = o.debugPodContainerSecurityContextSeccompProfile
     }
@@ -704,10 +756,11 @@ func cleanSecret(secret *corev1.Secret) (*corev1.Secret) {
     return secret
 }
 
-func treatConfigMaps(configMaps []*corev1.ConfigMap) ([]*corev1.ConfigMap) {
+func (o *DebugWardOptions) treatConfigMaps(configMaps []*corev1.ConfigMap) ([]*corev1.ConfigMap) {
     log.Trace("Starting treatConfigMap")
 
     for icm, _ := range configMaps {
+        configMaps[icm].ObjectMeta.Namespace = o.debugPodNamespace
         configMaps[icm].ObjectMeta.Labels = map[string]string{
             "debug-ward": "true",
         }
@@ -716,10 +769,11 @@ func treatConfigMaps(configMaps []*corev1.ConfigMap) ([]*corev1.ConfigMap) {
     return configMaps
 }
 
-func treatSecrets(secrets []*corev1.Secret) ([]*corev1.Secret) {
+func (o *DebugWardOptions) treatSecrets(secrets []*corev1.Secret) ([]*corev1.Secret) {
     log.Trace("Starting treatSecret")
 
     for isec, _ := range secrets {
+    secrets[isec].ObjectMeta.Namespace = o.debugPodNamespace
         secrets[isec].ObjectMeta.Labels = map[string]string{
             "debug-ward": "true",
         }
@@ -728,53 +782,34 @@ func treatSecrets(secrets []*corev1.Secret) ([]*corev1.Secret) {
     return secrets
 }
 
-func createResource(clientset *kubernetes.Clientset, yamlData []byte, resourceType string) error {
-    log.Trace("Starting createResource")
+func (o *DebugWardOptions) createResource(clientset *kubernetes.Clientset, yamlData []byte, resourceType string) error {
+    log.Trace("Starting createResource ", resourceType, string(yamlData))
+
     // Create resource in the cluster
-    _, err := clientset.CoreV1().RESTClient().Post().
-        Resource(getResourceType(yamlData)).
-        Namespace(getResourceNamespace(yamlData)).
-        Name(getResourceName(yamlData)).
+    resource := clientset.CoreV1().RESTClient().Post().
+        Resource(resourceType).
+        Namespace(o.debugPodNamespace).
+        Name("test-sebastian").
         Body(yamlData).
-        Do(context.Background()).
-        Get()
+        Do(context.TODO())
 
-    if err != nil {
-        return fmt.Errorf("failed to create ", resourceType, err)
-    }
+    log.Debug(resource)
+    // if err != nil {
+    //     log.Panic("Error creating resource type %v: %v\n", resourceType, err)
+    // }
+
+
     return nil
-}
-
-func getResourceType(yamlData []byte) string {
-    lines := strings.Split(string(yamlData), "\n")
-    for _, line := range lines {
-        if strings.HasPrefix(line, "kind:") {
-            parts := strings.Split(line, ":")
-            return strings.TrimSpace(parts[1])
-        }
-    }
-    return ""
-}
-
-func getResourceNamespace(yamlData []byte) string {
-    lines := strings.Split(string(yamlData), "\n")
-    for _, line := range lines {
-        if strings.HasPrefix(line, "namespace:") {
-            parts := strings.Split(line, ":")
-            return strings.TrimSpace(parts[1])
-        }
-    }
-    return "default" // Default namespace if not specified
 }
 
 func getResourceName(yamlData []byte) string {
     lines := strings.Split(string(yamlData), "\n")
-    for _, line := range lines {
-        if strings.HasPrefix(line, "metadata:") {
+    for i, line := range lines {
+        if strings.HasPrefix(line, "metadata:") && i+1 < len(lines) {
             // Check for the next line that contains the resource name
-            if len(lines) > 1 {
-                return strings.TrimSpace(strings.Split(lines[1], ":")[1])
-            }
+            rname := strings.TrimSpace(strings.Split(lines[i+1], ":")[1])
+            log.Trace("getResourceName is ", rname)
+            return rname
         }
     }
     return ""
