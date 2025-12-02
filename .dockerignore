@@ -1,7 +1,29 @@
-.dockerignore
+# Git
 .git
 .gitignore
-.github
-Dockerfile
-release/bin/*
-release/package/*
+
+# Build artifacts
+release/bin/
+release/package/
+
+# Test resources (keep them, but ignore if needed)
+# test-resources/
+
+# Documentation
+*.md
+!README.md
+
+# Docker files (don't copy into image)
+Dockerfile*
+docker-*.sh
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

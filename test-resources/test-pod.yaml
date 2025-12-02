@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-with-security
+  namespace: test-source-ns
+  labels:
+    app: test-app
+    version: v1
+spec:
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    runAsNonRoot: true
+  containers:
+  - name: app-container
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+      name: http
+    securityContext:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      runAsUser: 1000
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+    volumeMounts:
+    - name: config-volume
+      mountPath: /etc/config
+      readOnly: true
+    - name: secret-volume
+      mountPath: /etc/secrets
+      readOnly: true
+    env:
+    - name: CONFIG_MAP_VALUE
+      valueFrom:
+        configMapKeyRef:
+          name: test-app-config
+          key: app.properties
+    - name: SECRET_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: test-app-secret
+          key: username
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "100m"
+      limits:
+        memory: "128Mi"
+        cpu: "200m"
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  volumes:
+  - name: config-volume
+    configMap:
+      name: test-app-config
+  - name: secret-volume
+    secret:
+      secretName: test-app-secret
+

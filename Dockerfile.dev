@@ -1,0 +1,54 @@
+# Development image - includes build tools and source code for interactive development
+FROM golang:1.21-alpine
+
+WORKDIR /app
+
+# Install development tools
+RUN apk add --no-cache \
+    git \
+    bash \
+    curl \
+    ca-certificates \
+    && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && chmod +x kubectl \
+    && mv kubectl /usr/local/bin/kubectl
+
+# Copy go mod files and download dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code (will be overridden by volume mounts in docker-run.sh)
+COPY cmd ./cmd
+COPY pkg ./pkg
+COPY release ./release
+
+# Build the binary (can be rebuilt inside container)
+ARG DEBUG_WARD_GIT_VERSION=""
+RUN if [ -n "${DEBUG_WARD_GIT_VERSION}" ]; then \
+        export VERSION="${DEBUG_WARD_GIT_VERSION}"; \
+    else \
+        export VERSION="v0.0.0"; \
+    fi && \
+    export BIN_PATH=/app/release/bin/kubectl-debug-ward-${VERSION} && \
+    mkdir -p ${BIN_PATH} && \
+    GO111MODULE=on go build \
+    -o ${BIN_PATH}/kubectl-debug-ward \
+    -ldflags "-X main.version=${VERSION}" \
+    ./cmd/kubectl-debug-ward.go && \
+    cp release/LICENSE ${BIN_PATH}/LICENSE && \
+    chmod +x ${BIN_PATH}/kubectl-debug-ward && \
+    ln -sf ${BIN_PATH}/kubectl-debug-ward /usr/local/bin/kubectl-debug-ward
+
+# Default to bash for interactive use
+CMD ["/bin/bash"]
+
+
+
+
+
+
+
+
+
+
+

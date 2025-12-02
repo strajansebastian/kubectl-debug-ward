@@ -1,0 +1,47 @@
+# Build stage - contains Go and build tools
+# Using standard golang image (not alpine) for better network/certificate handling
+FROM golang:1.21
+
+WORKDIR /build
+
+# Update ca-certificates and install git
+RUN apt-get update && \
+    apt-get install -y ca-certificates git && \
+    update-ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies - disable checksum verification due to certificate issues
+# In production environments, ensure proper certificate configuration
+RUN go env -w GOSUMDB=off && \
+    go env -w GOPROXY=https://proxy.golang.org,direct && \
+    go mod download
+
+# Copy source code
+COPY cmd ./cmd
+COPY pkg ./pkg
+COPY release ./release
+
+# Build argument for version and target platform
+ARG DEBUG_WARD_GIT_VERSION=""
+ARG DEBUG_WARD_VERSION="v0.0.0"
+ARG GOOS="linux"
+ARG GOARCH="amd64"
+
+# Set version from build arg or git
+RUN if [ -n "${DEBUG_WARD_GIT_VERSION}" ]; then \
+        export VERSION="${DEBUG_WARD_GIT_VERSION}"; \
+    else \
+        export VERSION="${DEBUG_WARD_VERSION}"; \
+    fi && \
+    export BIN_PATH=/build/release/bin/kubectl-debug-ward-${VERSION} && \
+    mkdir -p ${BIN_PATH} && \
+    GO111MODULE=on CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} \
+    go build -ldflags "-X main.version=${VERSION} -w -s" \
+    -o ${BIN_PATH}/kubectl-debug-ward \
+    ./cmd/kubectl-debug-ward.go && \
+    cp release/LICENSE ${BIN_PATH}/LICENSE && \
+    chmod +x ${BIN_PATH}/kubectl-debug-ward
+

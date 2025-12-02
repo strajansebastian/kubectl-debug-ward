@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-app-config
+  namespace: test-source-ns
+data:
+  app.properties: |
+    server.port=8080
+    app.name=test-app
+    environment=development
+  config.yaml: |
+    database:
+      host: localhost
+      port: 5432
+    logging:
+      level: INFO
+

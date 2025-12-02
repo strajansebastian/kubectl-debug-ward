@@ -25,10 +25,10 @@ import (
     "path/filepath"
     // "time"
     "os"
-    // "gopkg.in/yaml.v3"
+    "bytes"
+    "gopkg.in/yaml.v3"
     "strings"
     "regexp"
-    // "bytes"
     "github.com/samber/lo"
     // "reflect"
 
@@ -36,6 +36,8 @@ import (
 
     corev1 "k8s.io/api/core/v1"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "k8s.io/apimachinery/pkg/runtime"
+    "k8s.io/apimachinery/pkg/runtime/serializer/json"
 
     log "github.com/sirupsen/logrus"
 
@@ -54,8 +56,14 @@ import (
 
 var (
     runExample = `
-    # with dry-run set to true will create a YAML file of what will be created if set to false
+    # with dry-run set to true (default) will print YAML/JSON of what will be created
+    %[1]s debug-ward -n pod-namespace pod
     %[1]s debug-ward -n pod-namespace pod --dry-run=true
+    %[1]s debug-ward -n pod-namespace pod --dry-run=true --output=json
+
+    # output can be saved and edited before applying
+    %[1]s debug-ward -n pod-namespace pod --output=yaml > debug-pod.yaml
+    # edit debug-pod.yaml, then apply with: kubectl apply -f debug-pod.yaml
 
     # examples of pod secuirty context values that can be ovewritten
     %[1]s debug-ward -n pod-namespace pod --dry-run=true --psc-runasuser=0 --psc-runasgroup=0 --psc-fsgroup=0 --psc-fsgroupchangepolicy=Always --psc-selinuxoptions="IMPLEMENTE_ME" --psc-seccompprofile="IMPLEMENT_ME" --psc-supplementalgroups="IMPLEMENT_1,IMPLEMENT_2" --psc-sysctls="IMPLEMENT_ME_1,IMPLEMENTE_ME_2"
@@ -100,6 +108,7 @@ type DebugWardOptions struct {
     dstK8sClient *kubernetes.Clientset
 
     dryRun bool
+    outputFormat string  // "yaml" or "json"
 
     // cluster identification
     debugPodKubeConfig string
@@ -164,6 +173,7 @@ func NewDebugWardOptions(streams genericiooptions.IOStreams) *DebugWardOptions {
         configFlags: genericclioptions.NewConfigFlags(true),
 
         dryRun: true,
+        outputFormat: "yaml",  // default to yaml
 
         sourcePodNamespace: "default",
         sourcePodName: "",
@@ -222,8 +232,9 @@ func NewDebugWardPatient(streams genericiooptions.IOStreams) *cobra.Command {
         },
     }
 
-    cmd.Flags().BoolVar(&o.dryRun, "dry-run", o.dryRun, "if true, print the yaml of the pod that is going to be created in the debug-ward namespace; default true")
-    cmd.Flags().StringVar(&o.debugPodNamespace, "debug-warn-namespace", o.debugPodNamespace, "if set will use this value as the debug-ward namespace; default ....SPECIFY....")
+    cmd.Flags().BoolVar(&o.dryRun, "dry-run", o.dryRun, "if true, print the yaml/json of the pod that is going to be created in the debug-ward namespace; default true")
+    cmd.Flags().StringVar(&o.outputFormat, "output", o.outputFormat, "output format: yaml or json (default: yaml). Only used with --dry-run=true")
+    cmd.Flags().StringVar(&o.debugPodNamespace, "debug-warn-namespace", o.debugPodNamespace, "if set will use this value as the debug-ward namespace; default debug-ward-tmp")
     o.configFlags.AddFlags(cmd.Flags())
 
     return cmd
@@ -268,6 +279,15 @@ func (o *DebugWardOptions) Complete(cmd *cobra.Command, args []string) error {
         return err
     }
     log.Trace("flag: dry-run set to ", o.dryRun)
+
+    o.outputFormat, err = cmd.Flags().GetString("output")
+    if err != nil {
+        return err
+    }
+    if o.outputFormat != "yaml" && o.outputFormat != "json" {
+        return fmt.Errorf("output format must be 'yaml' or 'json', got: %s", o.outputFormat)
+    }
+    log.Trace("flag: output format set to ", o.outputFormat)
 
     o.debugPodNamespace, err = cmd.Flags().GetString("debug-warn-namespace")
     if err != nil {
@@ -439,31 +459,167 @@ func (o *DebugWardOptions) Run() error {
 func (o *DebugWardOptions) debugWardDryRun(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
     log.Trace("Starting debugWardDryRun")
 
-    printr := printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.YAMLPrinter{})
+    var printr printers.ResourcePrinter
+    if o.outputFormat == "json" {
+        printr = printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.JSONPrinter{})
+    } else {
+        printr = printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.YAMLPrinter{})
+    }
 
+    // Print ConfigMaps
     for _, configMap := range configMaps {
-        fmt.Sprintf("\n---")
-        err := printr.PrintObj(configMap, os.Stdout)
-        if err != nil {
-            log.Panic(err)
+        if o.outputFormat == "yaml" {
+            fmt.Fprintf(os.Stdout, "\n---\n")
+            yamlOutput := o.printResourceAsYAML(configMap)
+            fmt.Fprint(os.Stdout, yamlOutput)
+        } else {
+            err := printr.PrintObj(configMap, os.Stdout)
+            if err != nil {
+                return fmt.Errorf("error printing ConfigMap: %w", err)
+            }
+        }
+        if o.outputFormat == "json" {
+            fmt.Fprintf(os.Stdout, "\n")
         }
     }
 
+    // Print Secrets
     for _, secret := range secrets {
-        fmt.Sprintf("\n---")
-        err := printr.PrintObj(secret, os.Stdout)
-        if err != nil {
-            log.Panic(err)
+        if o.outputFormat == "yaml" {
+            fmt.Fprintf(os.Stdout, "\n---\n")
+            yamlOutput := o.printResourceAsYAML(secret)
+            fmt.Fprint(os.Stdout, yamlOutput)
+        } else {
+            err := printr.PrintObj(secret, os.Stdout)
+            if err != nil {
+                return fmt.Errorf("error printing Secret: %w", err)
+            }
+        }
+        if o.outputFormat == "json" {
+            fmt.Fprintf(os.Stdout, "\n")
         }
     }
 
-    fmt.Sprintf("\n---")
-    err := printr.PrintObj(pod, os.Stdout)
-    if err != nil {
-       log.Panic(err)
+    // Print Pod
+    if o.outputFormat == "yaml" {
+        fmt.Fprintf(os.Stdout, "\n---\n")
+        yamlOutput := o.printResourceAsYAML(pod)
+        fmt.Fprint(os.Stdout, yamlOutput)
+    } else {
+        err := printr.PrintObj(pod, os.Stdout)
+        if err != nil {
+            return fmt.Errorf("error printing Pod: %w", err)
+        }
+    }
+    if o.outputFormat == "json" {
+        fmt.Fprintf(os.Stdout, "\n")
     }
 
     return nil
+}
+
+// printResourceAsYAML prints a resource as YAML, removing null and empty values
+func (o *DebugWardOptions) printResourceAsYAML(obj runtime.Object) string {
+    // First serialize to JSON (which respects omitempty)
+    serializer := json.NewSerializerWithOptions(
+        json.DefaultMetaFactory, scheme.Scheme, scheme.Scheme,
+        json.SerializerOptions{Yaml: false, Pretty: false, Strict: false},
+    )
+    
+    var jsonBuffer bytes.Buffer
+    err := serializer.Encode(obj, &jsonBuffer)
+    if err != nil {
+        log.Warn("Failed to serialize to JSON, falling back to standard printer: ", err)
+        // Fallback to standard printer
+        printr := printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.YAMLPrinter{})
+        var yamlBuffer bytes.Buffer
+        printr.PrintObj(obj, &yamlBuffer)
+        return o.removeNullValues(yamlBuffer.String())
+    }
+    
+    // Convert JSON to YAML and remove null values
+    var jsonObj interface{}
+    if err := yaml.Unmarshal(jsonBuffer.Bytes(), &jsonObj); err != nil {
+        log.Warn("Failed to unmarshal JSON, using fallback: ", err)
+        printr := printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.YAMLPrinter{})
+        var yamlBuffer bytes.Buffer
+        printr.PrintObj(obj, &yamlBuffer)
+        return o.removeNullValues(yamlBuffer.String())
+    }
+    
+    // Marshal to YAML
+    yamlBytes, err := yaml.Marshal(jsonObj)
+    if err != nil {
+        log.Warn("Failed to marshal to YAML, using fallback: ", err)
+        printr := printers.NewTypeSetter(scheme.Scheme).ToPrinter(&printers.YAMLPrinter{})
+        var yamlBuffer bytes.Buffer
+        printr.PrintObj(obj, &yamlBuffer)
+        return o.removeNullValues(yamlBuffer.String())
+    }
+    
+    return o.removeNullValues(string(yamlBytes))
+}
+
+// removeNullValues removes lines with null values and empty annotations/labels
+func (o *DebugWardOptions) removeNullValues(yamlStr string) string {
+    lines := strings.Split(yamlStr, "\n")
+    var result []string
+    skipStatusBlock := false
+    statusIndent := 0
+    
+    for _, line := range lines {
+        trimmed := strings.TrimSpace(line)
+        
+        // Detect start of status block
+        if trimmed == "status:" || strings.HasPrefix(trimmed, "status:") {
+            skipStatusBlock = true
+            statusIndent = len(line) - len(strings.TrimLeft(line, " \t"))
+            continue
+        }
+        
+        // Skip lines within status block (until we hit a line with same or less indentation)
+        if skipStatusBlock {
+            currentIndent := len(line) - len(strings.TrimLeft(line, " \t"))
+            if trimmed == "" || currentIndent > statusIndent {
+                continue
+            }
+            // We've exited the status block
+            skipStatusBlock = false
+        }
+        
+        // Skip lines with null values
+        if strings.HasSuffix(trimmed, ": null") || strings.HasSuffix(trimmed, ": \"\"") {
+            continue
+        }
+        
+        // Skip empty annotations or labels blocks
+        if trimmed == "annotations: {}" || trimmed == "labels: {}" || trimmed == "status: {}" {
+            continue
+        }
+        
+        // Skip creationTimestamp: null
+        if strings.Contains(trimmed, "creationTimestamp: null") {
+            continue
+        }
+        
+        // Skip deprecated serviceAccount field (use serviceAccountName instead)
+        if strings.HasPrefix(trimmed, "serviceAccount:") && !strings.HasPrefix(trimmed, "serviceAccountName:") {
+            continue
+        }
+        
+        // Skip empty string fields that should be omitted
+        if strings.HasSuffix(trimmed, ": \"\"") && 
+           (strings.Contains(trimmed, "generateName:") ||
+            strings.Contains(trimmed, "resourceVersion:") ||
+            strings.Contains(trimmed, "uid:") ||
+            strings.Contains(trimmed, "selfLink:")) {
+            continue
+        }
+        
+        result = append(result, line)
+    }
+    
+    return strings.Join(result, "\n")
 }
 
 func (o *DebugWardOptions) debugWardCopy(pod *corev1.Pod, configMaps []*corev1.ConfigMap, secrets []*corev1.Secret) error {
@@ -581,27 +737,62 @@ func (o *DebugWardOptions) getConfigMapsFromPod(pod *corev1.Pod) ([]*corev1.Conf
 
 func cleanPod(pod *corev1.Pod) (*corev1.Pod) {
     log.Trace("Starting cleanPod")
-    // main fields
+    // main fields - set to nil/empty to omit from output
     pod.ObjectMeta.CreationTimestamp = metav1.Time{}
     pod.ObjectMeta.ManagedFields = nil
     pod.ObjectMeta.OwnerReferences = nil
+    // Remove status field completely - it's runtime-only
     pod.Status = corev1.PodStatus{}
 
-    // meta fields
+    // meta fields - remove runtime-only fields (set to zero values to omit from YAML)
     pod.ObjectMeta.GenerateName = ""
     pod.ObjectMeta.Namespace = ""
     pod.ObjectMeta.ResourceVersion = ""
     pod.ObjectMeta.UID = ""
-    for label := range pod.ObjectMeta.Labels {
-        delete(pod.ObjectMeta.Labels, label)
+    pod.ObjectMeta.Generation = 0
+    pod.ObjectMeta.SelfLink = ""
+    pod.ObjectMeta.DeletionTimestamp = nil
+    pod.ObjectMeta.DeletionGracePeriodSeconds = nil
+    pod.ObjectMeta.Finalizers = nil
+    
+    // Set CreationTimestamp to zero time (will be omitted in YAML output)
+    pod.ObjectMeta.CreationTimestamp = metav1.Time{}
+    
+    // Remove kubectl-managed annotations (automatically generated)
+    if pod.ObjectMeta.Annotations != nil {
+        delete(pod.ObjectMeta.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+        // Remove empty annotations map if no annotations remain
+        if len(pod.ObjectMeta.Annotations) == 0 {
+            pod.ObjectMeta.Annotations = nil
+        }
+    }
+    
+    // Keep labels but remove system-generated ones
+    if pod.ObjectMeta.Labels != nil {
+        labelsToDelete := []string{}
+        for label := range pod.ObjectMeta.Labels {
+            // Remove system labels but keep user labels
+            if strings.HasPrefix(label, "controller-") || 
+               strings.HasPrefix(label, "pod-template-") ||
+               label == "pod-template-hash" {
+                labelsToDelete = append(labelsToDelete, label)
+            }
+        }
+        for _, label := range labelsToDelete {
+            delete(pod.ObjectMeta.Labels, label)
+        }
     }
 
-    // spec fields pod
+    // spec fields pod - preserve serviceAccountName if not default
+    // Only clear DNSPolicy, NodeName, SchedulerName (runtime fields)
     pod.Spec.DNSPolicy = ""
     pod.Spec.NodeName = ""
     pod.Spec.SchedulerName = ""
+    // Note: serviceAccountName is preserved (only set if not "default")
 
-    regexVolumeKubeApiAccess, err := regexp.Compile("^kube-api-access-[a-z]{1,16}")
+    // Remove kube-api-access volumes (automatically generated by Kubernetes)
+    // Pattern: kube-api-access- followed by alphanumeric characters (typically 5 chars like 8h2h4)
+    regexVolumeKubeApiAccess, err := regexp.Compile("^kube-api-access-[a-z0-9]+")
     if err != nil {
         log.Panic("Error compiling regex: %v\n", err)
     }
@@ -611,6 +802,7 @@ func cleanPod(pod *corev1.Pod) (*corev1.Pod) {
         log.Trace("checking if removal is applied on volume " , volume.Name)
         if regexVolumeKubeApiAccess.MatchString(volume.Name) {
             volumesRemoved = append(volumesRemoved, volume.Name)
+            log.Debug("removing kube-api-access volume: ", volume.Name)
         }
     }
     for _, vrName := range volumesRemoved {
@@ -626,8 +818,20 @@ func cleanPod(pod *corev1.Pod) (*corev1.Pod) {
         log.Debug("removing from container %v resource limits/requests", container.Name)
         pod.Spec.Containers[ic].Resources = corev1.ResourceRequirements{}
         log.Trace("removing from container %v volume mounts", container.Name)
+        // Remove volume mounts for kube-api-access volumes
         for _, vrmName := range volumesRemoved {
             pod.Spec.Containers[ic].VolumeMounts = deleteVolumeMount(pod.Spec.Containers[ic].VolumeMounts, vrmName)
+        }
+        // Also remove any remaining kube-api-access volume mounts that might have been missed
+        volumeMountsToRemove := []string{}
+        for _, vm := range pod.Spec.Containers[ic].VolumeMounts {
+            if regexVolumeKubeApiAccess.MatchString(vm.Name) {
+                volumeMountsToRemove = append(volumeMountsToRemove, vm.Name)
+            }
+        }
+        for _, vmName := range volumeMountsToRemove {
+            pod.Spec.Containers[ic].VolumeMounts = deleteVolumeMount(pod.Spec.Containers[ic].VolumeMounts, vmName)
+            log.Debug("removing kube-api-access volume mount: ", vmName)
         }
     }
 
@@ -640,6 +844,14 @@ func (o *DebugWardOptions) treatPod(pod *corev1.Pod) (*corev1.Pod) {
     pod.ObjectMeta.Namespace = o.debugPodNamespace
     pod.ObjectMeta.Labels = map[string]string{
         "debug-ward": "true",
+    }
+    
+    // Preserve serviceAccountName if it's not "default"
+    // If it's "default" or empty, Kubernetes will use default anyway, so we can omit it
+    if pod.Spec.ServiceAccountName == "default" || pod.Spec.ServiceAccountName == "" {
+        pod.Spec.ServiceAccountName = ""
+    } else {
+        log.Debug("preserving serviceAccountName: ", pod.Spec.ServiceAccountName)
     }
 
     // set escalated priviledges
@@ -723,12 +935,26 @@ func cleanConfigMaps(configMaps []*corev1.ConfigMap) ([]*corev1.ConfigMap) {
 func cleanConfigMap(configMap *corev1.ConfigMap) (*corev1.ConfigMap) {
     log.Trace("Starting cleanConfigMap")
 
-    // main fields
+    // main fields - remove runtime-only fields
     configMap.ObjectMeta.CreationTimestamp = metav1.Time{}
     configMap.ObjectMeta.ManagedFields = nil
     configMap.ObjectMeta.Namespace = ""
     configMap.ObjectMeta.UID = ""
     configMap.ObjectMeta.ResourceVersion = ""
+    configMap.ObjectMeta.Generation = 0
+    configMap.ObjectMeta.SelfLink = ""
+    configMap.ObjectMeta.DeletionTimestamp = nil
+    configMap.ObjectMeta.DeletionGracePeriodSeconds = nil
+    configMap.ObjectMeta.Finalizers = nil
+    
+    // Remove kubectl-managed annotations (automatically generated)
+    if configMap.ObjectMeta.Annotations != nil {
+        delete(configMap.ObjectMeta.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+        // Remove empty annotations map if no annotations remain
+        if len(configMap.ObjectMeta.Annotations) == 0 {
+            configMap.ObjectMeta.Annotations = nil
+        }
+    }
 
     return configMap
 }
@@ -746,12 +972,26 @@ func cleanSecrets(secrets []*corev1.Secret) ([]*corev1.Secret) {
 func cleanSecret(secret *corev1.Secret) (*corev1.Secret) {
     log.Trace("Starting cleanSecret")
 
-    // main fields
+    // main fields - remove runtime-only fields
     secret.ObjectMeta.CreationTimestamp = metav1.Time{}
     secret.ObjectMeta.ManagedFields = nil
     secret.ObjectMeta.Namespace = ""
     secret.ObjectMeta.UID = ""
     secret.ObjectMeta.ResourceVersion = ""
+    secret.ObjectMeta.Generation = 0
+    secret.ObjectMeta.SelfLink = ""
+    secret.ObjectMeta.DeletionTimestamp = nil
+    secret.ObjectMeta.DeletionGracePeriodSeconds = nil
+    secret.ObjectMeta.Finalizers = nil
+    
+    // Remove kubectl-managed annotations (automatically generated)
+    if secret.ObjectMeta.Annotations != nil {
+        delete(secret.ObjectMeta.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+        // Remove empty annotations map if no annotations remain
+        if len(secret.ObjectMeta.Annotations) == 0 {
+            secret.ObjectMeta.Annotations = nil
+        }
+    }
 
     return secret
 }
